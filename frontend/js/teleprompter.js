@@ -20,6 +20,13 @@
  * janela ou, com backend, outro computador) durante a apresentação, o texto é
  * atualizado sem perder a posição e o trecho alterado fica destacado em azul.
  *
+ * Tela de transmissão: o título principal fica no topo; a barra de tópicos
+ * mostra o tópico atual e os próximos. O botão "Editar roteiro" (tecla E) abre
+ * um painel ao lado do texto para mudar títulos, textos e tópicos sem parar o
+ * teleprompter; ao salvar, a mudança entra na tela na hora.
+ * A sessão guarda a posição no texto: indo ao editor e voltando, a leitura
+ * retoma no mesmo ponto.
+ *
  * Com backend (GF.config.API_BASE), o teleprompter abre uma conexão em tempo
  * real (GF.api.live). A fala vai para o servidor — pela API Deepgram ou pelo
  * reconhecimento do navegador — e o servidor devolve:
@@ -68,13 +75,16 @@
       '<div class="studio-title"><b id="s-title"></b><small id="s-sub"></small></div>' +
       '<span class="mob-time ok" id="mob-time" aria-hidden="true">0:00</span>' +
       '<div class="studio-tools">' +
+        '<span class="upd-chip" id="upd-chip" role="status" hidden></span>' +
         '<span class="tally" id="tally"></span>' +
         '<span data-conn></span>' +
+        '<button type="button" class="btn btn-sm edit-btn" id="btn-edit" aria-controls="live-edit" aria-expanded="false" title="Editar o roteiro sem parar o teleprompter (E)">' + icon('square-pen', { size: 16 }) + '<span>Editar roteiro</span></button>' +
         '<button type="button" class="icon-btn" id="btn-rail" aria-label="Âncoras (A)" title="Âncoras (A)">' + icon('anchor') + '</button>' +
         '<button type="button" class="icon-btn desk-only" id="btn-settings" aria-haspopup="true" aria-label="Ajustes de leitura" title="Ajustes de leitura">' + icon('type') + '</button>' +
         '<button type="button" class="icon-btn desk-only" id="btn-full" aria-label="Tela cheia (F)" title="Tela cheia (F)">' + icon('maximize') + '</button>' +
       '</div>' +
     '</header>' +
+    '<nav class="topic-bar" id="topic-bar" aria-label="Tópicos do roteiro"></nav>' +
     '<div class="studio-body" id="body">' +
       '<section class="stage" id="stage" aria-label="Texto do roteiro">' +
         '<div class="scroller" id="scroller"><div class="script" id="script"></div></div>' +
@@ -84,6 +94,7 @@
         '<div id="pop"></div>' +
       '</section>' +
       '<aside class="rail" id="rail" aria-label="Âncoras"></aside>' +
+      '<aside class="live-edit" id="live-edit" aria-label="Editar roteiro durante a transmissão" hidden></aside>' +
     '</div>' +
     '<footer class="timing state-ok" id="timing">' +
       '<div class="t-time desk-only">' +
@@ -95,10 +106,10 @@
         '<div class="t-progress" id="t-prog" role="progressbar" aria-label="Tempo decorrido" aria-valuemin="0" aria-valuemax="100"><span class="fill" id="t-fill"></span><span class="script-pos" id="t-pos" title="Posição no texto"></span></div>' +
       '</div>' +
       '<div class="t-controls" id="controls">' +
-        '<button type="button" class="btn ctl" id="c-prev" aria-label="Bloco anterior">' + icon('skip-back', { size: 20 }) + '</button>' +
+        '<button type="button" class="btn ctl" id="c-prev" aria-label="Tópico anterior" title="Tópico anterior (←)">' + icon('skip-back', { size: 20 }) + '</button>' +
         '<button type="button" class="btn ctl mob-only rel" id="c-anchors" aria-label="Âncoras">' + icon('anchor', { size: 20 }) + '<span class="badge" id="c-badge" hidden></span></button>' +
         '<button type="button" class="btn btn-primary ctl ctl-play" id="c-play"></button>' +
-        '<button type="button" class="btn ctl" id="c-next" aria-label="Próximo bloco">' + icon('skip-forward', { size: 20 }) + '</button>' +
+        '<button type="button" class="btn ctl" id="c-next" aria-label="Próximo tópico" title="Próximo tópico (→)">' + icon('skip-forward', { size: 20 }) + '</button>' +
         '<button type="button" class="btn ctl mob-only" id="c-more" aria-label="Ajustes de leitura">' + icon('type', { size: 20 }) + '</button>' +
         '<span class="speed desk-only" role="group" aria-label="Velocidade">' +
           '<button type="button" class="icon-btn" id="c-slow" aria-label="Mais devagar (seta para baixo)" title="Mais devagar (↓)">' + icon('minus', { size: 18 }) + '</button>' +
@@ -228,9 +239,31 @@
       var b = script.blocks[i];
       ui.$('#t-block').textContent = (i + 1) + '/' + script.blocks.length + ' · ' + b.title;
       if (st.unseen.indexOf(b.id) >= 0) { st.unseen = st.unseen.filter(function (x) { return x !== b.id; }); renderUpdBanner(); }
+      renderTopicBar(changed);
+      markEditCurrent();
       renderRail();
     }
   }
+
+  /* ---------------- tópico atual e próximos ----------------
+   * Hoje o tópico atual é o que está na linha de leitura (rolagem, botões ou voz).
+   * Quando o serviço de IA reconhecer o assunto falado, basta chamar
+   * goBlock(índice) com o tópico identificado: esta barra acompanha sozinha. */
+  function renderTopicBar(animate) {
+    var i = st.cur, n = script.blocks.length, b = script.blocks[i];
+    if (!b) return;
+    var nx = script.blocks[i + 1];
+    ui.$('#topic-bar').innerHTML =
+      '<div class="tb-cur" aria-live="polite">' +
+        '<span class="tb-num tc">' + (i + 1) + '/' + n + '</span>' +
+        '<b class="tb-title' + (animate ? ' is-new' : '') + '">' + (b.title.trim() ? U.esc(b.title) : 'Sem título') + '</b></div>' +
+      (nx ? '<button type="button" class="tb-next" data-goblock="' + (i + 1) + '" title="Ir para o próximo tópico">' +
+          '<span class="tb-label">A seguir</span><span class="tb-next-t">' + (nx.title.trim() ? U.esc(nx.title) : 'Sem título') + '</span></button>'
+        : '<span class="tb-label">Último tópico</span>');
+  }
+  ui.$('#topic-bar').addEventListener('click', function (e) {
+    var c = e.target.closest('[data-goblock]'); if (c) goBlock(+c.dataset.goblock);
+  });
 
   function voiceTracked() { return !!(live && live.ready && auto.source === 'voz'); }
   /* âncoras que cruzam a linha de leitura durante a rolagem contínua */
@@ -438,8 +471,10 @@
 
   /* ---------------- sessão ---------------- */
   function persist() {
-    if (st.started) S.setActive({ scriptId: script.id, startedAt: st.startedAt, elapsedMs: Math.round(st.elapsedMs), anchors: st.anchors });
+    // wordIndex: posição no texto, para voltar ao mesmo ponto depois de ir ao editor.
+    if (st.started) S.setActive({ scriptId: script.id, startedAt: st.startedAt, elapsedMs: Math.round(st.elapsedMs), anchors: st.anchors, wordIndex: wordAtLine() });
   }
+  window.addEventListener('pagehide', persist);
   function play() {
     if (!st.started) { st.started = true; st.startedAt = Date.now(); st.elapsedMs = 0; }
     st.running = true; st.lastTick = performance.now();
@@ -527,7 +562,7 @@
       '<button type="button" class="a-check" data-toggle="' + a.id + '" aria-pressed="' + (s === 'dita') + '" aria-label="' + U.esc(a.label) + ': ' + (s === 'dita' ? 'dita' : s === 'pulada' ? 'pulada' : 'pendente') + '. Marcar como ' + (s === 'dita' ? 'pendente' : 'dita') + '">' + mark + '</button>' +
       '<button type="button" class="a-main" data-go="' + a.id + '">' +
         '<span class="a-label">' + U.esc(a.label) + (a.priority === 'essencial' ? '<span class="a-ess" title="Essencial">' + icon('star', { size: 12 }) + '</span>' : '') + '</span>' +
-        '<span class="a-meta">' + t.label + ' · bloco ' + (anchorBlockIndex(a) + 1) + (risk ? ' · <b>ficou para trás</b>' : s === 'pulada' ? ' · pulada' : '') + cutTag(a) + '</span></button>' +
+        '<span class="a-meta">' + t.label + ' · tópico ' + (anchorBlockIndex(a) + 1) + (risk ? ' · <b>ficou para trás</b>' : s === 'pulada' ? ' · pulada' : '') + cutTag(a) + '</span></button>' +
       '<button type="button" class="a-skip" data-skip="' + a.id + '" aria-pressed="' + (s === 'pulada') + '" title="' + (s === 'pulada' ? 'Desfazer' : 'Marcar como pulada') + '" aria-label="' + (s === 'pulada' ? 'Desfazer pulada' : 'Marcar ' + U.esc(a.label) + ' como pulada') + '">' + icon(s === 'pulada' ? 'undo-2' : 'skip-forward', { size: 15 }) + '</button></li>';
   }
   function railHTML(inSheet) {
@@ -587,6 +622,7 @@
   }
   function toggleRail() {
     var w = window.innerWidth;
+    if (ed.open) { ui.toast('Feche a edição do roteiro para ver as âncoras.', 'info', 2600); return; }
     if (w < 768) return st.sheet ? closeSheet() : openSheet();
     if (w < 1280) { st.drawer = !st.drawer; layoutRail(); return; }
     setPref('railOpen', prefs.railOpen === false); layoutRail();
@@ -617,7 +653,7 @@
     var blocks = (c.cuttableBlocks || []).slice(0, 3);
     return '<div class="cut-note" role="status">' + icon('scissors', { size: 16 }) + '<div><b>Tempo apertado</b>' +
       '<span>O texto que falta passa do tempo em cerca de ' + U.clock(c.deficitSec) + '. Mantenha as essenciais; as cortáveis podem sair.</span>' +
-      (blocks.length ? '<span>Blocos que podem sair: ' + blocks.map(function (b) { return U.esc(b.title) + ' (−' + U.clock(b.saveSec) + ')'; }).join(', ') + '</span>' : '') +
+      (blocks.length ? '<span>Tópicos que podem sair: ' + blocks.map(function (b) { return U.esc(b.title) + ' (−' + U.clock(b.saveSec) + ')'; }).join(', ') + '</span>' : '') +
       '</div></div>';
   }
 
@@ -707,22 +743,44 @@
     var fresh = S.getScript(script.id);
     if (fresh) applyFresh(fresh);
   });
-  function applyFresh(fresh, by) {
+  // Assinatura da estrutura: título principal, ordem, títulos e duração dos tópicos, âncoras.
+  function structSig(s) {
+    return s.title + '§' + s.blocks.map(function (b) { return b.id + '|' + b.title + '|' + b.durationSec; }).join('§') +
+      '§' + s.anchors.map(function (a) { return a.id + '|' + a.text; }).join(',');
+  }
+  /* Aplica uma versão nova do roteiro sem reiniciar o teleprompter: tempo,
+   * âncoras e posição de leitura continuam. own = salva pelo painel desta tela. */
+  function applyFresh(fresh, by, own) {
     var changedBlocks = [];
     fresh.blocks.forEach(function (nb) {
       var ob = script.blocks.filter(function (b) { return b.id === nb.id; })[0];
-      if (!ob || ob.text !== nb.text) changedBlocks.push({ id: nb.id, parts: newParts(ob ? ob.text : '', nb.text) });
+      if (!ob || ob.text !== nb.text || ob.title !== nb.title) changedBlocks.push({ id: nb.id, parts: !ob || ob.text !== nb.text ? newParts(ob ? ob.text : '', nb.text) : [] });
     });
-    var structural = fresh.blocks.length !== script.blocks.length || fresh.anchors.length !== script.anchors.length;
-    if (!changedBlocks.length && !structural && fresh.title === script.title) return;
+    var structural = structSig(fresh) !== structSig(script);
+    if (!changedBlocks.length && !structural) return false;
     fresh.anchors.forEach(function (a) { if (!st.anchors[a.id]) st.anchors[a.id] = 'pendente'; });
     script = fresh;
     changedBlocks.forEach(function (c) {
       st.updated[c.id] = { at: Date.now(), parts: c.parts };
       if (blockIndexOf(c.id) !== st.cur && st.unseen.indexOf(c.id) < 0) st.unseen.push(c.id);
     });
-    renderHeader(); renderScript(); renderRail(); renderUpdBanner();
+    st.unseen = st.unseen.filter(function (x) { return blockIndexOf(x) >= 0; }); // tópicos removidos
+    ui.$$('#t-prog .tick').forEach(function (t) { t.remove(); }); ticks = false; // durações podem ter mudado
+    renderHeader(); renderScript(); renderRail(); renderUpdBanner(); renderTopicBar(false);
+    showUpdChip();
     if (by && changedBlocks.length) ui.toast('Roteiro atualizado por ' + U.esc(by) + '.', 'info', 3000);
+    if (!own && ed.open) onEditExternal();
+    return true;
+  }
+  /* Indicador no topo: "Atualizado às 19:20" (destacado por alguns segundos). */
+  var chipTimer = null;
+  function showUpdChip() {
+    var c = ui.$('#upd-chip');
+    c.hidden = false;
+    c.innerHTML = icon('refresh-cw', { size: 14 }) + '<span>Atualizado às ' + U.time(Date.now()) + '</span>';
+    c.classList.add('is-fresh');
+    clearTimeout(chipTimer);
+    chipTimer = setTimeout(function () { c.hidden = true; }, 6000);
   }
   function newParts(a, b) {
     return GF.suggestions.diff(a, b).filter(function (p) { return p.t === 'ins' && p.v.trim().length > 3; }).map(function (p) { return p.v.trim(); });
@@ -738,6 +796,204 @@
     ui.$('[data-see]', bn).addEventListener('click', function () { goBlock(blockIndexOf(bid)); });
   }
 
+  /* ---------------- edição durante a transmissão ----------------
+   * Painel ao lado do texto: o teleprompter continua rodando (rolagem, tempo,
+   * voz). As mudanças ficam num rascunho e só entram na tela ao salvar.
+   * Ao salvar: grava no aparelho (S.saveScript) e aplica aqui com applyFresh.
+   * Com backend ligado, S.saveScript também envia ao servidor, que repassa aos
+   * outros teleprompters abertos neste roteiro (script:updated). */
+  var ed = { open: false, draft: null, dirty: false, conflict: false, savedAt: null, fresh: {} };
+  var edEl = ui.$('#live-edit');
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  function syncNote() {
+    return GF.api.sync.enabled() ? 'também enviado aos outros aparelhos' : 'só neste navegador (backend desligado)';
+  }
+  function edTopicHTML(b, i) {
+    var n = ed.draft.blocks.length, isCur = script.blocks[st.cur] && script.blocks[st.cur].id === b.id;
+    var missing = ed.draft.anchors.filter(function (a) { return a.blockId === b.id && b.text.indexOf(a.text) < 0; }).length;
+    return '<article class="le-topic' + (isCur ? ' is-current' : '') + '" data-le-block="' + b.id + '">' +
+      '<div class="le-thead">' +
+        '<span class="le-num">Tópico ' + U.pad(i + 1) + '</span>' +
+        '<span class="le-now">· no ar</span>' +
+        '<span class="le-acts">' +
+          '<button type="button" class="icon-btn" data-le="up" title="Mover para cima" aria-label="Mover tópico ' + (i + 1) + ' para cima"' + (i === 0 ? ' disabled' : '') + '>' + icon('arrow-up', { size: 16 }) + '</button>' +
+          '<button type="button" class="icon-btn" data-le="down" title="Mover para baixo" aria-label="Mover tópico ' + (i + 1) + ' para baixo"' + (i === n - 1 ? ' disabled' : '') + '>' + icon('arrow-down', { size: 16 }) + '</button>' +
+          '<button type="button" class="icon-btn" data-le="del" title="Excluir tópico" aria-label="Excluir tópico ' + (i + 1) + '"' + (n === 1 ? ' disabled' : '') + '>' + icon('trash-2', { size: 16 }) + '</button>' +
+        '</span></div>' +
+      '<label class="sr-only" for="le-t-' + b.id + '">Título do tópico ' + (i + 1) + '</label>' +
+      '<input class="le-ttitle" id="le-t-' + b.id + '" data-f="title" placeholder="Título do tópico" value="' + U.esc(b.title) + '">' +
+      '<label class="sr-only" for="le-x-' + b.id + '">Texto do tópico ' + (i + 1) + '</label>' +
+      '<textarea class="textarea le-text" id="le-x-' + b.id + '" data-f="text" placeholder="Texto do tópico">' + U.esc(b.text) + '</textarea>' +
+      (missing ? '<p class="le-warn">' + missing + (missing === 1 ? ' âncora saiu do texto' : ' âncoras saíram do texto') + '</p>' : '') +
+      '</article>';
+  }
+  function renderEdit() {
+    var d = ed.draft;
+    edEl.innerHTML =
+      '<div class="le-head"><div class="le-head-t"><h2>Editar roteiro</h2><p class="le-sub" id="le-sub"></p></div>' +
+        '<button type="button" class="icon-btn" data-le="close" aria-label="Fechar edição">' + icon('x', { size: 18 }) + '</button></div>' +
+      '<div class="le-body" id="le-body">' +
+        '<div class="notice notice-warn le-conflict" id="le-conflict"' + (ed.conflict ? '' : ' hidden') + '>' + icon('triangle-alert', { size: 16 }) +
+          '<span>O roteiro mudou em outro lugar. ' +
+          '<button type="button" class="link" data-le="reload">Carregar a versão nova</button></span></div>' +
+        '<div class="field"><label for="le-title">Título principal</label><input class="input le-main" id="le-title" value="' + U.esc(d.title) + '"></div>' +
+        '<div class="le-topics" id="le-topics">' + d.blocks.map(edTopicHTML).join('') + '</div>' +
+        '<button type="button" class="btn add-block btn-block" data-le="add">' + icon('plus', { size: 16 }) + 'Adicionar tópico</button>' +
+      '</div>' +
+      '<div class="le-foot">' +
+        '<p class="le-state" id="le-state" role="status"></p>' +
+        '<div class="le-actions">' +
+          '<button type="button" class="btn btn-ghost" data-le="discard">Descartar</button>' +
+          '<button type="button" class="btn btn-primary" data-le="save">Salvar e aplicar</button></div>' +
+      '</div>';
+    ui.$$('.le-text', edEl).forEach(grow);
+    renderEditState();
+  }
+  function grow(t) { t.style.height = 'auto'; t.style.height = Math.max(96, t.scrollHeight + 2) + 'px'; }
+  function renderEditState() {
+    if (!ed.open) return;
+    var sub = ui.$('#le-sub', edEl), state = ui.$('#le-state', edEl);
+    sub.textContent = st.running ? 'A leitura continua enquanto você edita' : st.started ? 'Teleprompter pausado' : 'Teleprompter não iniciado';
+    state.className = 'le-state' + (ed.dirty ? ' is-dirty' : '');
+    state.textContent = ed.dirty ? 'Não salvo' : ed.savedAt ? 'Aplicado às ' + U.time(ed.savedAt) : '';
+    state.title = ed.savedAt && !ed.dirty ? 'Salvo ' + syncNote() : '';
+    ui.$('[data-le=save]', edEl).disabled = !ed.dirty;
+    ui.$('[data-le=discard]', edEl).hidden = !ed.dirty;
+  }
+  function markEditCurrent() {
+    if (!ed.open) return;
+    var cur = script.blocks[st.cur];
+    ui.$$('.le-topic', edEl).forEach(function (t) { t.classList.toggle('is-current', !!cur && t.dataset.leBlock === cur.id); });
+  }
+  function setDirty() { ed.dirty = true; renderEditState(); }
+  /* Rola só a lista do painel (scrollIntoView rolaria a página inteira do estúdio). */
+  function panelScroll(node, where) {
+    var body = ui.$('#le-body', edEl); if (!body || !node) return;
+    var top = node.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop - 12;
+    if (where === 'start') body.scrollTop = top;
+    else if (top < body.scrollTop) body.scrollTop = top;
+    else if (top + node.offsetHeight + 24 > body.scrollTop + body.clientHeight) body.scrollTop = top + node.offsetHeight + 24 - body.clientHeight;
+  }
+
+  /* Ao abrir ou fechar em telas largas, o texto muda de largura: mantém a mesma palavra na linha de leitura. */
+  function relayout(change) {
+    var k = wordAtLine();
+    change();
+    applyPrefs(); measure();
+    goWord(k);
+  }
+  function openEdit() {
+    if (ed.open) { var f = ui.$('.le-topic.is-current', edEl); if (f) { panelScroll(f, 'start'); ui.$('.le-text', f).focus({ preventScroll: true }); } return; }
+    if (st.sheet) closeSheet();
+    if (st.pop) closePop();
+    st.drawer = false; layoutRail();
+    ed.open = true; ed.draft = clone(script); ed.dirty = false; ed.conflict = false; ed.fresh = {};
+    renderEdit();
+    relayout(function () { edEl.hidden = false; el.body.classList.add('is-editing'); });
+    ui.$('#btn-edit').setAttribute('aria-expanded', 'true');
+    ui.$('#btn-edit').classList.add('is-on');
+    var cur = ui.$('.le-topic.is-current', edEl);
+    if (cur) { panelScroll(cur, 'start'); ui.$('.le-text', cur).focus({ preventScroll: true }); }
+    else ui.$('#le-title', edEl).focus({ preventScroll: true });
+  }
+  function closeEdit(force) {
+    if (!ed.open) return;
+    if (ed.dirty && !force) {
+      ui.confirm({ title: 'Descartar alterações?', message: 'As mudanças ainda não salvas não vão para a tela.', confirmLabel: 'Descartar', tone: 'danger' })
+        .then(function (ok) { if (ok) closeEdit(true); });
+      return;
+    }
+    ed.open = false; ed.draft = null; ed.dirty = false;
+    relayout(function () { edEl.hidden = true; el.body.classList.remove('is-editing'); });
+    edEl.innerHTML = '';
+    ui.$('#btn-edit').setAttribute('aria-expanded', 'false');
+    ui.$('#btn-edit').classList.remove('is-on');
+    ui.$('#btn-edit').focus();
+  }
+  function onEditExternal() {
+    // Outra aba, o editor completo ou outro computador salvou enquanto o painel estava aberto.
+    if (!ed.dirty) { ed.draft = clone(script); renderEdit(); return; }
+    ed.conflict = true;
+    var c = ui.$('#le-conflict', edEl); if (c) c.hidden = false;
+  }
+  function saveEdit() {
+    var d = ed.draft;
+    if (!d.title.trim()) { ui.toast('Dê um título principal ao roteiro.', 'warn'); ui.$('#le-title', edEl).focus({ preventScroll: true }); return; }
+    d.blocks.forEach(function (b, i) { if (!b.title.trim()) b.title = 'Tópico ' + (i + 1); });
+    var contentSig = function (s) { return s.blocks.map(function (b) { return b.id + '|' + b.text; }).join('§'); };
+    var latest = S.getScript(script.id) || script;
+    // Só título, tópicos e âncoras vêm do painel; o resto (programa, aprovação, histórico) vem da versão salva.
+    var out = Object.assign(clone(latest), { title: d.title, blocks: d.blocks, anchors: d.anchors });
+    if (contentSig(out) !== contentSig(latest)) {
+      if (out.status === 'aprovado') {
+        S.addRevision(out, { kind: 'edicao', blockId: null, before: '', after: '', note: 'Roteiro alterado durante a transmissão; voltou para revisão.' });
+        out.status = 'em-revisao'; out.approvedBy = null; out.approvedAt = null;
+        var backToReview = true;
+      } else {
+        S.addRevision(out, { kind: 'edicao', blockId: null, before: '', after: '', note: 'Roteiro alterado durante a transmissão.' });
+      }
+    }
+    S.saveScript(out);
+    applyFresh(S.getScript(script.id) || out, null, true);
+    ed.draft = clone(script); ed.dirty = false; ed.conflict = false; ed.fresh = {}; ed.savedAt = Date.now();
+    var keep = ui.$('#le-body', edEl).scrollTop;
+    renderEdit();
+    ui.$('#le-body', edEl).scrollTop = keep;
+    if (backToReview) ui.toast('Roteiro aplicado. Como foi alterado, voltou para revisão.', 'info', 3500);
+  }
+
+  edEl.addEventListener('input', function (e) {
+    var t = e.target;
+    if (t.id === 'le-title') { ed.draft.title = t.value; return setDirty(); }
+    var art = t.closest('[data-le-block]'); if (!art) return;
+    var b = ed.draft.blocks.filter(function (x) { return x.id === art.dataset.leBlock; })[0];
+    if (t.dataset.f === 'title') b.title = t.value;
+    if (t.dataset.f === 'text') { b.text = t.value; grow(t); }
+    setDirty();
+  });
+  edEl.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-le]'); if (!btn || btn.disabled) return;
+    var act = btn.dataset.le, d = ed.draft;
+    if (act === 'close') return closeEdit();
+    if (act === 'save') return saveEdit();
+    if (act === 'discard' || act === 'reload') {
+      ed.draft = clone(script); ed.dirty = false; ed.conflict = false; ed.fresh = {};
+      renderEdit(); return;
+    }
+    var art = btn.closest('[data-le-block]');
+    var i = art ? d.blocks.findIndex(function (x) { return x.id === art.dataset.leBlock; }) : -1;
+    function rerender(focusSel) {
+      var keep = ui.$('#le-body', edEl).scrollTop;
+      ui.$('#le-topics', edEl).innerHTML = d.blocks.map(edTopicHTML).join('');
+      ui.$$('.le-text', edEl).forEach(grow);
+      ui.$('#le-body', edEl).scrollTop = keep;
+      setDirty();
+      var f = focusSel && ui.$(focusSel, edEl); if (f) f.focus({ preventScroll: true });
+    }
+    if (act === 'add' || act === 'insert') {
+      var nb = { id: U.uid('b'), title: '', durationSec: 30, text: '' };
+      var at = act === 'add' ? d.blocks.length : i + 1;
+      d.blocks.splice(at, 0, nb); ed.fresh[nb.id] = true;
+      rerender('#le-t-' + nb.id);
+      var na = ui.$('[data-le-block="' + nb.id + '"]', edEl); if (na) panelScroll(na, 'nearest');
+    } else if (act === 'up' || act === 'down') {
+      var b = d.blocks.splice(i, 1)[0];
+      d.blocks.splice(act === 'up' ? i - 1 : i + 1, 0, b);
+      rerender('[data-le-block="' + b.id + '"] [data-le=' + act + ']:not(:disabled)');
+    } else if (act === 'del') {
+      var del = d.blocks[i];
+      ui.confirm({ title: 'Excluir tópico?', message: '“' + U.esc(del.title || 'Sem título') + '” sai do roteiro quando você salvar.', confirmLabel: 'Excluir', tone: 'danger' })
+        .then(function (ok) {
+          if (!ok) return;
+          d.blocks.splice(i, 1);
+          d.anchors = d.anchors.filter(function (a) { return a.blockId !== del.id; });
+          rerender();
+        });
+    }
+  });
+  ui.$('#btn-edit').addEventListener('click', function () { if (ed.open) closeEdit(); else openEdit(); });
+
   /* ---------------- cabeçalho e rodapé ---------------- */
   function renderHeader() {
     ui.$('#s-title').textContent = script.title;
@@ -752,6 +1008,7 @@
     var t = ui.$('#tally');
     t.className = 'tally' + (st.running ? ' is-live' : '');
     t.innerHTML = '<i></i>' + (st.running ? 'No ar' : st.started ? 'Pausado' : 'Pronto');
+    renderEditState();
   }
   var ticks = false;
   function renderTiming() {
@@ -839,7 +1096,7 @@
     ui.modal({
       title: 'Atalhos de teclado',
       body: '<div class="shortcuts">' + [
-        ['Espaço', 'Iniciar e pausar'], ['↑ ↓', 'Velocidade'], ['V', 'Velocidade automática'], ['+ −', 'Tamanho da fonte'], ['→ ←', 'Próximo e anterior bloco'],
+        ['Espaço', 'Iniciar e pausar'], ['↑ ↓', 'Velocidade'], ['V', 'Velocidade automática'], ['+ −', 'Tamanho da fonte'], ['→ ←', 'Próximo e anterior tópico'], ['E', 'Editar roteiro sem parar'],
         ['Home', 'Voltar ao início'], ['D', 'Âncora mais próxima: dita'], ['S', 'Âncora mais próxima: pulada'],
         ['A', 'Lista de âncoras'], ['M', 'Espelhar'], ['F', 'Tela cheia'], ['Esc', 'Fechar painéis']
       ].map(function (k) { return '<div><span>' + k[1] + '</span><span>' + k[0].split(' ').map(function (x) { return '<span class="kbd">' + x + '</span>'; }).join(' ') + '</span></div>'; }).join('') + '</div>',
@@ -872,16 +1129,23 @@
     setAnchor(a.dataset.anchor, st.anchors[a.dataset.anchor] === 'dita' ? 'pendente' : 'dita');
   });
   window.addEventListener('resize', function () { applyPrefs(); layoutRail(); });
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { measure(); updateCurrent(true); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () {
+    measure();
+    if (restoreWord != null && !st.running) goWord(restoreWord); // a fonte final muda a altura das linhas
+    updateCurrent(true);
+  });
   document.addEventListener('click', function (e) {
     if (st.pop && !e.target.closest('#pop, #btn-settings, #c-more')) closePop();
   });
   document.addEventListener('keydown', function (e) {
     if (document.body.classList.contains('has-modal')) return;
+    // Dentro do painel de edição, as teclas são do formulário (Esc fecha o painel).
+    if (e.target.closest && e.target.closest('#live-edit')) { if (e.key === 'Escape') closeEdit(); return; }
     var tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.ctrlKey || e.metaKey || e.altKey) return;
     var k = e.key;
-    if (k === 'Escape') { if (st.pop) closePop(); else if (st.sheet) closeSheet(); else if (st.drawer) { st.drawer = false; layoutRail(); } return; }
+    if (k === 'Escape') { if (st.pop) closePop(); else if (st.sheet) closeSheet(); else if (st.drawer) { st.drawer = false; layoutRail(); } else if (ed.open) closeEdit(); return; }
+    if (k === 'e' || k === 'E') { e.preventDefault(); openEdit(); return; }
     if (k === ' ' && tag !== 'button') { e.preventDefault(); toggle(); }
     else if (k === 'ArrowUp') { e.preventDefault(); setSpeed(prefs.speed + 1); }
     else if (k === 'ArrowDown') { e.preventDefault(); setSpeed(prefs.speed - 1); }
@@ -907,6 +1171,9 @@
   renderPlay();
   layoutRail();
   renderTiming();
+  // Voltando de outra tela (editor, roteiros): retoma no mesmo ponto do texto, pausado.
+  var restoreWord = restored && restored.scriptId === script.id && restored.wordIndex ? restored.wordIndex : null;
+  if (restoreWord != null) goWord(restoreWord);
   connectLive();
 
   /* sem roteiro: lista para escolher */

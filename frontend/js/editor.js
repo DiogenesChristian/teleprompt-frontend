@@ -13,7 +13,7 @@
   }
   GF.app.rememberScript(script.id);
 
-  var st = { dirty: false, contentChanged: false, sel: {}, review: { status: 'idle', decisions: {}, confirms: {} } };
+  var st = { dirty: false, contentChanged: false, sel: {}, mode: 'edit', review: { status: 'idle', decisions: {}, confirms: {} } };
   var CUES = ['PAUSA', 'ÊNFASE', 'CÂMERA 1', 'CÂMERA 2', 'VINHETA', 'ENTRA VT'];
 
   function toLocalInput(ts) {
@@ -29,9 +29,9 @@
         '<div class="actions" style="align-items:center"><span class="save-state" id="save-state" role="status"></span>' +
           '<button type="button" class="icon-btn" id="btn-history" title="Alterações" aria-label="Alterações">' + icon('history', { size: 18 }) + '</button>' +
           '<button type="button" class="btn" id="btn-save">Salvar</button>' +
-          '<button type="button" class="btn btn-primary" id="btn-studio">' + icon('monitor-play', { size: 16 }) + 'Teleprompter</button></div></div>' +
-      '<label class="sr-only" for="f-title">Título do roteiro</label>' +
-      '<input class="title-input" id="f-title" placeholder="Título do roteiro" value="' + ui.esc(script.title) + '">' +
+          '<button type="button" class="btn btn-primary" id="btn-studio">' + icon('monitor-play', { size: 16 }) + '<span id="studio-label">Transmissão</span></button></div></div>' +
+      '<label class="ed-label" for="f-title">Título principal</label>' +
+      '<input class="title-input" id="f-title" placeholder="Assunto do roteiro" value="' + ui.esc(script.title) + '">' +
       '<div class="meta">' +
         '<div class="field"><label for="f-program">Programa</label><input class="input" id="f-program" value="' + ui.esc(script.program) + '"></div>' +
         '<div class="field"><label for="f-presenter">Apresentador</label><input class="input" id="f-presenter" value="' + ui.esc(script.presenter) + '"></div>' +
@@ -40,10 +40,17 @@
       '</div>' +
     '</div>' +
     '<div class="editor">' +
-      '<div style="display:grid;gap:14px;min-width:0">' +
-        '<div class="sum" id="sum"></div>' +
-        '<div class="blocks" id="blocks"></div>' +
-        '<button type="button" class="btn add-block btn-block" id="btn-add">' + icon('plus', { size: 16 }) + 'Adicionar bloco</button>' +
+      '<div class="ed-main">' +
+        '<div class="ed-bar">' +
+          '<div class="seg" role="group" aria-label="Modo de exibição" id="ed-mode">' +
+            '<button type="button" data-mode="edit" aria-pressed="true">' + icon('square-pen', { size: 15 }) + 'Editar tópicos</button>' +
+            '<button type="button" data-mode="preview" aria-pressed="false">' + icon('eye', { size: 15 }) + 'Roteiro completo</button></div>' +
+          '<div class="sum" id="sum"></div></div>' +
+        '<div class="ed-pane" id="edit-pane">' +
+          '<div class="blocks" id="blocks"></div>' +
+          '<button type="button" class="btn add-block btn-block" id="btn-add">' + icon('plus', { size: 16 }) + 'Adicionar tópico</button>' +
+        '</div>' +
+        '<div class="preview" id="preview" hidden></div>' +
       '</div>' +
       '<aside class="ed-side">' +
         '<section class="card" aria-labelledby="h-appr"><div class="card-head"><h2 id="h-appr">Aprovação</h2><span id="appr-pill"></span></div><div id="approval" style="display:grid;gap:12px"></div></section>' +
@@ -81,22 +88,48 @@
     var sum = script.blocks.reduce(function (a, b) { return a + (b.durationSec || 0); }, 0);
     var est = script.blocks.reduce(function (a, b) { return a + U.estimateSec(b.text); }, 0);
     var diff = sum - script.durationSec;
-    ui.$('#sum').innerHTML = '<span>' + script.blocks.length + ' blocos</span>' +
-      '<span>Soma dos blocos <b>' + U.clock(sum) + '</b></span>' +
+    var n = script.blocks.length;
+    ui.$('#sum').innerHTML = '<span>' + n + (n === 1 ? ' tópico' : ' tópicos') + '</span>' +
+      '<span>Soma dos tópicos <b>' + U.clock(sum) + '</b></span>' +
       '<span>Leitura estimada <b>' + U.clock(est) + '</b></span>' +
-      (Math.abs(diff) > 2 ? '<span class="warn">Blocos ' + (diff > 0 ? 'passam' : 'ficam') + ' ' + U.clock(Math.abs(diff)) + (diff > 0 ? ' da' : ' abaixo da') + ' duração · <button type="button" class="link" id="fix-dur">Ajustar duração</button></span>' : '');
+      (Math.abs(diff) > 2 ? '<span class="warn">Tópicos ' + (diff > 0 ? 'passam' : 'ficam') + ' ' + U.clock(Math.abs(diff)) + (diff > 0 ? ' da' : ' abaixo da') + ' duração · <button type="button" class="link" id="fix-dur">Ajustar duração</button></span>' : '');
     var fx = ui.$('#fix-dur');
     if (fx) fx.addEventListener('click', function () { script.durationSec = sum; ui.$('#f-dur').value = U.clock(sum); markDirty(false); renderSum(); });
   }
 
-  /* ---------------- blocos ---------------- */
+  /* ---------------- roteiro completo (somente leitura) ---------------- */
+  function renderPreview() {
+    var meta = [script.program, script.presenter].filter(Boolean).map(ui.esc);
+    meta.push('<span class="tc">' + U.clock(script.durationSec) + '</span>');
+    ui.$('#preview').innerHTML = '<article class="pv-doc">' +
+      '<header class="pv-top"><span class="eyebrow">Título principal</span><h1>' + (script.title.trim() ? ui.esc(script.title) : '<i>Sem título</i>') + '</h1>' +
+        '<p class="muted">' + meta.join(' · ') + '</p></header>' +
+      script.blocks.map(function (b, i) {
+        return '<section class="pv-topic" id="pv-' + b.id + '">' +
+          '<div class="pv-head"><span class="pv-num">Tópico ' + U.pad(i + 1) + '</span><span class="tc">' + U.clock(b.durationSec) + '</span></div>' +
+          '<h2>' + (b.title.trim() ? ui.esc(b.title) : '<i>Sem título</i>') + '</h2>' +
+          '<p class="pv-text">' + (b.text.trim() ? GF.renderText(b.text, blockAnchors(b)) : '<span class="muted">Sem texto neste tópico.</span>') + '</p></section>';
+      }).join('') + '</article>';
+  }
+  function setMode(m) {
+    st.mode = m;
+    ui.$$('#ed-mode button').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.mode === m)); });
+    ui.$('#edit-pane').hidden = m !== 'edit';
+    ui.$('#preview').hidden = m !== 'preview';
+    if (m === 'preview') renderPreview();
+  }
+  ui.$('#ed-mode').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode);
+  });
+
+  /* ---------------- tópicos (blocos do roteiro) ---------------- */
   function getBlock(bid) { return script.blocks.filter(function (b) { return b.id === bid; })[0]; }
   function blockAnchors(b) { return script.anchors.filter(function (a) { return a.blockId === b.id; }); }
   function blockEl(bid) { return ui.$('[data-block="' + bid + '"]'); }
 
   function statsHTML(b) {
     var est = U.estimateSec(b.text), over = est > b.durationSec * 1.1;
-    return '<span class="block-stats' + (over ? ' warn' : '') + '" data-stats>' + U.words(b.text) + ' palavras · ~<span class="tc">' + U.clock(est) + '</span>' + (over ? ' · longo para o bloco' : '') + '</span>';
+    return '<span class="block-stats' + (over ? ' warn' : '') + '" data-stats>' + U.words(b.text) + ' palavras · ~<span class="tc">' + U.clock(est) + '</span>' + (over ? ' · longo para o tópico' : '') + '</span>';
   }
   function chipsHTML(b) {
     return blockAnchors(b).map(function (a) {
@@ -112,14 +145,14 @@
   function blockHTML(b, i) {
     var n = script.blocks.length;
     return '<article class="block" data-block="' + b.id + '">' +
-      '<div class="block-head"><span class="block-num">' + U.pad(i + 1) + '</span>' +
-        '<label class="sr-only" for="bt-' + b.id + '">Título do bloco</label><input class="block-title" id="bt-' + b.id + '" data-field="title" value="' + ui.esc(b.title) + '">' +
-        '<label class="sr-only" for="bd-' + b.id + '">Duração do bloco</label><input class="input input-tc" id="bd-' + b.id + '" data-field="dur" value="' + U.clock(b.durationSec) + '" title="Duração do bloco">' +
-        '<button type="button" class="icon-btn" data-act="up" aria-label="Mover para cima"' + (i === 0 ? ' disabled style="visibility:hidden"' : '') + '>' + icon('arrow-up', { size: 17 }) + '</button>' +
-        '<button type="button" class="icon-btn" data-act="down" aria-label="Mover para baixo"' + (i === n - 1 ? ' disabled style="visibility:hidden"' : '') + '>' + icon('arrow-down', { size: 17 }) + '</button>' +
-        '<button type="button" class="icon-btn" data-act="del" aria-label="Excluir bloco"' + (n === 1 ? ' disabled style="visibility:hidden"' : '') + '>' + icon('trash-2', { size: 17 }) + '</button></div>' +
-      '<label class="sr-only" for="tx-' + b.id + '">Texto do bloco</label>' +
-      '<textarea class="textarea" id="tx-' + b.id + '" data-field="text" placeholder="Texto que será lido">' + ui.esc(b.text) + '</textarea>' +
+      '<div class="block-head"><span class="block-num">Tópico ' + U.pad(i + 1) + '</span>' +
+        '<label class="sr-only" for="bd-' + b.id + '">Duração do tópico</label><input class="input input-tc" id="bd-' + b.id + '" data-field="dur" value="' + U.clock(b.durationSec) + '" title="Duração do tópico">' +
+        '<button type="button" class="icon-btn" data-act="up" aria-label="Mover tópico para cima" title="Mover para cima"' + (i === 0 ? ' disabled style="visibility:hidden"' : '') + '>' + icon('arrow-up', { size: 17 }) + '</button>' +
+        '<button type="button" class="icon-btn" data-act="down" aria-label="Mover tópico para baixo" title="Mover para baixo"' + (i === n - 1 ? ' disabled style="visibility:hidden"' : '') + '>' + icon('arrow-down', { size: 17 }) + '</button>' +
+        '<button type="button" class="icon-btn" data-act="del" aria-label="Excluir tópico" title="Excluir tópico"' + (n === 1 ? ' disabled style="visibility:hidden"' : '') + '>' + icon('trash-2', { size: 17 }) + '</button></div>' +
+      '<label class="sr-only" for="bt-' + b.id + '">Título do tópico ' + (i + 1) + '</label><input class="block-title" id="bt-' + b.id + '" data-field="title" placeholder="Título do tópico" value="' + ui.esc(b.title) + '">' +
+      '<label class="sr-only" for="tx-' + b.id + '">Texto do tópico ' + (i + 1) + '</label>' +
+      '<textarea class="textarea" id="tx-' + b.id + '" data-field="text" placeholder="Texto do tópico: o que o apresentador vai ler">' + ui.esc(b.text) + '</textarea>' +
       '<div class="block-tools">' +
         '<button type="button" class="btn btn-sm" data-act="anchor" disabled title="Selecione um trecho do texto">' + icon('anchor', { size: 14 }) + 'Marcar âncora</button>' +
         '<label class="sr-only" for="cue-' + b.id + '">Inserir marcação técnica</label>' +
@@ -177,7 +210,7 @@
       markDirty(true); renderBlocks();
       var nb = ui.$('[data-block="' + b.id + '"] [data-act=' + act + ']'); (nb && !nb.disabled ? nb : ui.$('#bt-' + b.id)).focus();
     } else if (act === 'del') {
-      ui.confirm({ title: 'Excluir bloco?', message: '“' + ui.esc(b.title) + '” e suas âncoras serão removidos.', confirmLabel: 'Excluir', tone: 'danger' }).then(function (ok) {
+      ui.confirm({ title: 'Excluir tópico?', message: '“' + ui.esc(b.title || 'Sem título') + '”, com o texto e as âncoras, será removido.', confirmLabel: 'Excluir', tone: 'danger' }).then(function (ok) {
         if (!ok) return;
         script.blocks.splice(i, 1);
         script.anchors = script.anchors.filter(function (a) { return a.blockId !== b.id; });
@@ -188,9 +221,9 @@
     else if (btn.dataset.editAnchor) anchorModal(b, script.anchors.filter(function (a) { return a.id === btn.dataset.editAnchor; })[0]);
   });
   ui.$('#btn-add').addEventListener('click', function () {
-    var b = { id: U.uid('b'), title: 'Bloco ' + (script.blocks.length + 1), durationSec: 30, text: '' };
+    var b = { id: U.uid('b'), title: 'Tópico ' + (script.blocks.length + 1), durationSec: 30, text: '' };
     script.blocks.push(b); markDirty(true); renderBlocks();
-    ui.$('#tx-' + b.id).focus();
+    var t = ui.$('#bt-' + b.id); t.focus(); t.select();
   });
 
   /* ---------------- âncoras ---------------- */
@@ -398,12 +431,20 @@
 
   /* ---------------- ações ---------------- */
   ui.$('#btn-save').addEventListener('click', function () { save(); });
+  // Se este roteiro já está numa transmissão em andamento (sessão salva no aparelho),
+  // o botão volta para ela; o teleprompter retoma tempo, âncoras e posição no texto.
+  function renderStudioBtn() {
+    var act = S.getActive(), onAir = !!(act && act.scriptId === script.id);
+    ui.$('#studio-label').textContent = onAir ? 'Voltar à transmissão' : 'Transmissão';
+    ui.$('#btn-studio').title = onAir ? 'Voltar à transmissão em andamento' : 'Abrir a tela de transmissão ao vivo';
+  }
   ui.$('#btn-studio').addEventListener('click', function () { if (st.dirty) save(true); location.href = 'teleprompter.html?id=' + script.id; });
   document.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); } });
   window.addEventListener('beforeunload', function (e) { if (st.dirty) { e.preventDefault(); e.returnValue = ''; } });
   GF.net.on(function () { if (st.review.status !== 'loading') renderAI(); });
 
   renderBlocks();
+  renderStudioBtn();
   renderSaveState();
   renderApproval();
   renderAI();

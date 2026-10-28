@@ -8,7 +8,7 @@
  * Os roteiros não passam pelo service worker: ficam no armazenamento local
  * do navegador (js/store.js).
  */
-const CACHE = 'globo-flow-v4';
+const CACHE = 'globo-flow-v5';
 const CORE = [
   './', 'index.html', 'login.html', 'editor.html', 'teleprompter.html',
   'historico.html', 'configuracoes.html', 'offline.html', 'manifest.webmanifest',

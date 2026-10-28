@@ -10,11 +10,13 @@
       .sort(function (a, b) { return a.scheduledAt - b.scheduledAt; })[0];
   }
 
+  function topics(s) { var n = (s.blocks || []).length; return n + (n === 1 ? ' tópico' : ' tópicos'); }
+
   function rowHTML(s) {
     return '<li class="s-row">' +
       '<a class="s-main" href="editor.html?id=' + s.id + '">' +
         '<span class="s-title">' + ui.esc(s.title || 'Sem título') + '</span>' +
-        '<span class="s-sub">' + ui.esc([s.program, s.presenter].filter(Boolean).join(' · ') || '—') + '</span></a>' +
+        '<span class="s-sub">' + ui.esc([s.program, s.presenter, topics(s)].filter(Boolean).join(' · ')) + '</span></a>' +
       '<span class="s-dur tc">' + U.clock(s.durationSec) + '</span>' +
       '<span class="s-status">' + ui.statusPill(s.status) + '</span>' +
       '<span class="s-when">' + (s.scheduledAt ? U.dayLabel(s.scheduledAt) + ', ' + U.time(s.scheduledAt) : 'Sem horário') + '</span>' +
