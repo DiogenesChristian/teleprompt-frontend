@@ -43,4 +43,5 @@
     });
   });
   render();
+  window.addEventListener('gf:synced', render); // dados atualizados pelo servidor
 })(window.GF);

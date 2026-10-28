@@ -16,9 +16,18 @@
  * microfone ou sem permissão, a velocidade se ajusta para terminar o roteiro
  * no tempo previsto. Os cálculos ficam em js/pace.js.
  *
- * Mudanças de última hora: se o roteiro for salvo no editor (outra aba ou
- * janela) durante a apresentação, o texto é atualizado sem perder a posição
- * e o trecho alterado fica destacado em azul.
+ * Mudanças de última hora: se o roteiro for salvo no editor (outra aba,
+ * janela ou, com backend, outro computador) durante a apresentação, o texto é
+ * atualizado sem perder a posição e o trecho alterado fica destacado em azul.
+ *
+ * Com backend (GF.config.API_BASE), o teleprompter abre uma conexão em tempo
+ * real (GF.api.live). A fala vai para o servidor — pela API Deepgram ou pelo
+ * reconhecimento do navegador — e o servidor devolve:
+ *  - âncoras ditas, marcadas sozinhas;
+ *  - âncoras que ficaram para trás, que sobem na lista e pulsam;
+ *  - improviso: o trecho atual esmaece e aparece o cartão de "ponte" com uma
+ *    frase curta para voltar ao roteiro;
+ *  - plano de corte: com o tempo apertado, o que é cortável e o que é essencial.
  */
 (function (GF) {
   if (!GF.app.boot({ page: 'estudio', title: 'Teleprompter', compactNav: true })) return;
@@ -38,7 +47,8 @@
     pos: 0, lastPos: 0, jump: false, cur: 0,
     anchors: {}, auto: {}, filter: 'todas',
     updated: {}, unseen: [],
-    pxPerWord: 30, sheet: null, pop: null, drawer: false, wake: null
+    pxPerWord: 30, sheet: null, pop: null, drawer: false, wake: null,
+    behind: [], off: false, bridge: null, cut: null, serverPos: null
   };
   script.anchors.forEach(function (a) { st.anchors[a.id] = 'pendente'; });
   var restored = S.getActive();
@@ -70,6 +80,7 @@
         '<div class="scroller" id="scroller"><div class="script" id="script"></div></div>' +
         '<div class="reading-line" id="rline" aria-hidden="true"></div>' +
         '<div class="upd-banner" id="upd-banner" role="status" hidden></div>' +
+        '<div class="bridge" id="bridge" role="status" aria-live="polite" hidden></div>' +
         '<div id="pop"></div>' +
       '</section>' +
       '<aside class="rail" id="rail" aria-label="Âncoras"></aside>' +
@@ -170,6 +181,7 @@
     st.pos = Math.max(0, Math.min(p, el.scroller.scrollHeight - el.scroller.clientHeight));
     if (isJump) { st.jump = true; st.lastPos = st.pos; }
     el.scroller.scrollTop = st.pos;
+    if (isJump && live) live.send({ type: 'position', wordIndex: wordAtLine() });
   }
   el.scroller.addEventListener('scroll', function () {
     var delta = Math.abs(el.scroller.scrollTop - st.pos);
@@ -220,10 +232,12 @@
     }
   }
 
+  function voiceTracked() { return !!(live && live.ready && auto.source === 'voz'); }
   /* âncoras que cruzam a linha de leitura durante a rolagem contínua */
   function crossAnchors() {
     var from = st.lastPos, to = st.pos, ly = lineY(), changed = false;
-    if (to > from && !st.jump && st.running && prefs.autoMark !== false) {
+    // Com a voz analisada pelo servidor, só conta como dita a âncora que foi falada de verdade.
+    if (to > from && !st.jump && st.running && prefs.autoMark !== false && !voiceTracked()) {
       script.anchors.forEach(function (a) {
         if (st.anchors[a.id] !== 'pendente') return;
         var y = anchorOffset(a.id);
@@ -247,13 +261,14 @@
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
-  var lastPersist = 0, lastAuto = 0;
+  var lastPersist = 0, lastAuto = 0, lastClock = 0;
   setInterval(function () {
     var now = performance.now();
     if (st.running) { st.elapsedMs += now - (st.lastTick || now); updateCurrent(); }
     st.lastTick = now;
     if (st.running && now - lastPersist > 1000) { lastPersist = now; persist(); }
     if (now - lastAuto > 500) { lastAuto = now; autoTick(); }
+    if (live && st.started && now - lastClock > 2000) { lastClock = now; live.send({ type: 'clock', elapsedSec: Math.round(st.elapsedMs / 1000), wordIndex: voiceTracked() ? null : wordAtLine() }); }
     renderTiming();
   }, 250);
 
@@ -261,7 +276,7 @@
   /* ---------------- velocidade automática ---------------- */
   var P = GF.pace;
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  var auto = { on: !!prefs.autoSpeed, source: null, wpm: 150, rec: null, times: [], spoken: [], interim: [], lastWord: 0, waiting: false, voiceFailed: false };
+  var auto = { on: !!prefs.autoSpeed, source: null, engine: null, wpm: 150, rec: null, cloud: null, times: [], spoken: [], interim: [], lastWord: 0, waiting: false, voiceFailed: false, cloudFailed: false };
   var scriptWords = [], blockStart = [];
 
   function indexWords() {
@@ -297,40 +312,86 @@
       auto.wpm += (target - auto.wpm) * 0.3;
     } else {
       var now = Date.now();
-      auto.waiting = now - auto.lastWord > 3000;
+      // segura a rolagem em silêncio ou durante o improviso (o texto não "briga" com o apresentador)
+      auto.waiting = now - auto.lastWord > 3000 || st.off;
       var base = P.spokenWpm(auto.times, now) || auto.wpm;
-      // corrige a posição: acelera se a fala está à frente do texto, desacelera se está atrás
-      var factor = 1, k = P.locate(scriptWords, auto.spoken.concat(auto.interim), wordAtLine());
+      // corrige a posição: acelera se a fala está à frente do texto, desacelera se está atrás.
+      // Com backend, a posição vem do servidor; sem ele, é calculada aqui.
+      var factor = 1, k = st.serverPos && now - st.serverPos.at < 2500 ? st.serverPos.k : P.locate(scriptWords, auto.spoken.concat(auto.interim), wordAtLine());
       if (k >= 0) {
         var diff = yOfWord(k) - (el.scroller.scrollTop + lineY());
         factor = 1 + Math.max(-0.5, Math.min(0.6, diff / (el.scroller.clientHeight * 0.4)));
       }
-      auto.wpm = P.clamp(auto.wpm + (base * factor - auto.wpm) * 0.4);
+      if (!st.off) auto.wpm = P.clamp(auto.wpm + (base * factor - auto.wpm) * 0.4); // no improviso o ritmo fica parado
     }
     renderSpeed();
   }
 
   function startAuto() {
     if (!auto.on || !st.running) return;
-    if (auto.source === 'tempo' || auto.rec) return;
-    if (SR && !auto.voiceFailed && GF.net.online()) startVoice(); else useTime();
+    if (auto.source === 'tempo' || auto.rec || auto.cloud) return;
+    if (GF.net.online() && (canCloud() || (SR && !auto.voiceFailed))) startVoice(); else useTime();
   }
+  /* Voz pela API Deepgram, através do backend (a chave fica no servidor). */
+  function canCloud() {
+    return !!(live && live.ready && live.deepgram && !auto.cloudFailed && navigator.mediaDevices && window.MediaRecorder);
+  }
+  function resetHeard() { auto.lastWord = Date.now(); auto.times = []; auto.spoken = []; auto.interim = []; }
   function startVoice() {
+    if (canCloud()) return startCloud();
+    if (SR && !auto.voiceFailed) return startBrowserVoice();
+    useTime();
+  }
+  function startCloud() {
+    var c = {}; auto.cloud = c; auto.source = 'voz'; auto.engine = 'deepgram'; resetHeard();
+    navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }).then(function (stream) {
+      if (auto.cloud !== c) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+      var mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'].filter(function (m) { return MediaRecorder.isTypeSupported(m); })[0];
+      var rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      c.stream = stream; c.rec = rec;
+      live.send({ type: 'speech:start', engine: 'deepgram', mimeType: rec.mimeType });
+      rec.ondataavailable = function (e) { if (e.data && e.data.size && auto.cloud === c) live.send(e.data); };
+      rec.start(250); // envia um pedaço de áudio a cada 250 ms
+    }, function () {
+      if (auto.cloud !== c) return;
+      auto.cloud = null; auto.cloudFailed = true; auto.voiceFailed = true;
+      useTime('Microfone indisponível. A velocidade segue o tempo previsto.');
+    });
+    renderSpeed();
+  }
+  function stopCloud() {
+    var c = auto.cloud; auto.cloud = null;
+    if (!c) return;
+    try { if (c.rec && c.rec.state !== 'inactive') c.rec.stop(); } catch (e) { /* noop */ }
+    if (c.stream) c.stream.getTracks().forEach(function (t) { t.stop(); });
+    if (live) live.send({ type: 'speech:stop' });
+  }
+  /* Texto reconhecido (navegador ou Deepgram) → ritmo e posição da fala. */
+  function feedWords(text, isFinal) {
+    var now = Date.now(), ws = P.words(text);
+    if (isFinal) {
+      ws.forEach(function () { auto.times.push(now); });
+      auto.spoken = auto.spoken.concat(ws).slice(-12);
+      auto.interim = [];
+    } else auto.interim = ws.slice(-6);
+    auto.times = auto.times.slice(-60);
+    if (ws.length) auto.lastWord = now;
+  }
+  /* Voz pelo reconhecimento do próprio navegador (sem chave da Deepgram ou como reserva). */
+  function startBrowserVoice() {
     var r;
     try { r = new SR(); } catch (e) { return useTime(); }
     r.lang = 'pt-BR'; r.continuous = true; r.interimResults = true;
     r.onresult = function (e) {
-      var now = Date.now(), interim = [];
+      var interim = '';
       for (var i = e.resultIndex; i < e.results.length; i++) {
-        var ws = P.words(e.results[i][0].transcript);
+        var txt = e.results[i][0].transcript;
         if (e.results[i].isFinal) {
-          ws.forEach(function () { auto.times.push(now); });
-          auto.spoken = auto.spoken.concat(ws).slice(-12);
-        } else interim = ws;
+          feedWords(txt, true);
+          if (live) live.send({ type: 'speech:text', text: txt, final: true }); // o servidor analisa âncoras e improviso
+        } else interim += ' ' + txt;
       }
-      auto.interim = interim.slice(-6);
-      auto.times = auto.times.slice(-60);
-      auto.lastWord = now;
+      if (interim) feedWords(interim, false);
     };
     r.onerror = function (e) {
       if (e.error === 'no-speech' || e.error === 'aborted') return;
@@ -339,19 +400,23 @@
         : 'Microfone indisponível. A velocidade segue o tempo previsto.');
     };
     r.onend = function () { if (auto.rec === r && auto.on && st.running) { try { r.start(); } catch (err) { /* reinício já em curso */ } } };
-    auto.rec = r; auto.source = 'voz'; auto.lastWord = Date.now(); auto.times = []; auto.spoken = []; auto.interim = [];
+    auto.rec = r; auto.source = 'voz'; auto.engine = 'navegador'; resetHeard();
+    if (live) live.send({ type: 'speech:start', engine: 'browser' });
     try { r.start(); } catch (e) { auto.rec = null; useTime(); }
     renderSpeed();
   }
   function stopVoice() {
     var r = auto.rec; auto.rec = null;
     if (r) { try { r.stop(); } catch (e) { /* noop */ } }
+    stopCloud();
     if (auto.source === 'voz') auto.source = null;
+    auto.engine = null;
   }
   function useTime(msg) {
     var r = auto.rec; auto.rec = null;
     if (r) { try { r.abort(); } catch (e) { /* noop */ } }
-    auto.source = 'tempo'; auto.waiting = false;
+    stopCloud();
+    auto.source = 'tempo'; auto.engine = null; auto.waiting = false;
     if (msg) ui.toast(msg, 'info', 4000);
     renderSpeed();
   }
@@ -365,7 +430,7 @@
     var b = ui.$('#c-auto'); if (!b) return;
     b.setAttribute('aria-pressed', String(auto.on));
     b.classList.toggle('is-on', auto.on);
-    var label = !auto.on ? '' : auto.source === 'voz' ? (auto.waiting ? 'Auto · aguardando fala' : 'Auto · voz') : auto.source === 'tempo' ? 'Auto · tempo' : 'Auto';
+    var label = !auto.on ? '' : auto.source === 'voz' ? (st.off ? 'Auto · fora do roteiro' : auto.waiting ? 'Auto · aguardando fala' : 'Auto · voz') : auto.source === 'tempo' ? 'Auto · tempo' : 'Auto';
     ui.$('#c-speed').textContent = auto.on ? (auto.source ? Math.round(auto.wpm) : '–') : prefs.speed;
     ui.$('#c-wpm').textContent = auto.on ? (auto.source === 'voz' ? 'voz' : auto.source === 'tempo' ? 'tempo' : 'auto') : manualWpm() + ' ppm';
     var ta = ui.$('#t-auto'); ta.hidden = !auto.on; ta.textContent = label;
@@ -390,7 +455,7 @@
   function toggle() { if (st.running) pause(); else play(); }
   function counts() {
     var c = { total: 0, dita: 0, pulada: 0, pendente: 0, risco: 0 };
-    script.anchors.forEach(function (a) { c.total++; c[st.anchors[a.id]]++; if (st.anchors[a.id] === 'pendente' && isPassed(a)) c.risco++; });
+    script.anchors.forEach(function (a) { c.total++; c[st.anchors[a.id]]++; if (isBehind(a)) c.risco++; });
     return c;
   }
   function stop() {
@@ -410,6 +475,7 @@
         details: script.anchors.map(function (a) { return { label: a.label, type: a.type, priority: a.priority, state: st.anchors[a.id], block: (script.blocks[anchorBlockIndex(a)] || {}).title }; })
       });
       S.setActive(null);
+      if (live) live.close();
       location.href = 'historico.html';
     });
   }
@@ -432,6 +498,7 @@
   function setAnchor(aid, state) {
     st.anchors[aid] = state; delete st.auto[aid];
     refreshAnchorMarks(); renderRail(); persist();
+    if (live) live.send({ type: 'anchor', id: aid, state: state });
   }
   function markNearest(state) {
     var ly = el.scroller.scrollTop + lineY(), best = null, bd = 1e9;
@@ -444,14 +511,23 @@
   }
 
   /* ---------------- painel de âncoras ---------------- */
+  function isBehind(a) { return st.anchors[a.id] === 'pendente' && (isPassed(a) || st.behind.indexOf(a.id) >= 0); }
+  function cutTag(a) {
+    if (!st.cut || st.anchors[a.id] !== 'pendente') return '';
+    if (st.cut.essential.indexOf(a.id) >= 0) return ' · <b class="a-keep">essencial</b>';
+    if (st.cut.cuttable.indexOf(a.id) >= 0) return ' · <span class="a-cut">pode cortar</span>';
+    return '';
+  }
   function anchorItem(a, risk) {
     var s = st.anchors[a.id], t = GF.ANCHOR_TYPES[a.type] || GF.ANCHOR_TYPES.obrigatoria;
+    // durante o improviso, as pendentes que ficaram para trás e a âncora da ponte pulsam
+    var pulse = st.off && s === 'pendente' && (risk || (st.bridge && st.bridge.anchorId === a.id));
     var mark = s === 'dita' ? icon('check', { size: 14, stroke: 3 }) : s === 'pulada' ? icon('minus', { size: 14, stroke: 3 }) : '';
-    return '<li class="anchor' + (risk ? ' is-risk' : '') + ' st-' + s + (anchorBlockIndex(a) === st.cur ? ' is-current' : '') + '">' +
+    return '<li class="anchor' + (risk ? ' is-risk' : '') + (pulse ? ' is-pulse' : '') + (st.cut && st.cut.cuttable.indexOf(a.id) >= 0 && s === 'pendente' ? ' is-cuttable' : '') + ' st-' + s + (anchorBlockIndex(a) === st.cur ? ' is-current' : '') + '">' +
       '<button type="button" class="a-check" data-toggle="' + a.id + '" aria-pressed="' + (s === 'dita') + '" aria-label="' + U.esc(a.label) + ': ' + (s === 'dita' ? 'dita' : s === 'pulada' ? 'pulada' : 'pendente') + '. Marcar como ' + (s === 'dita' ? 'pendente' : 'dita') + '">' + mark + '</button>' +
       '<button type="button" class="a-main" data-go="' + a.id + '">' +
         '<span class="a-label">' + U.esc(a.label) + (a.priority === 'essencial' ? '<span class="a-ess" title="Essencial">' + icon('star', { size: 12 }) + '</span>' : '') + '</span>' +
-        '<span class="a-meta">' + t.label + ' · bloco ' + (anchorBlockIndex(a) + 1) + (risk ? ' · <b>ficou para trás</b>' : s === 'pulada' ? ' · pulada' : '') + '</span></button>' +
+        '<span class="a-meta">' + t.label + ' · bloco ' + (anchorBlockIndex(a) + 1) + (risk ? ' · <b>ficou para trás</b>' : s === 'pulada' ? ' · pulada' : '') + cutTag(a) + '</span></button>' +
       '<button type="button" class="a-skip" data-skip="' + a.id + '" aria-pressed="' + (s === 'pulada') + '" title="' + (s === 'pulada' ? 'Desfazer' : 'Marcar como pulada') + '" aria-label="' + (s === 'pulada' ? 'Desfazer pulada' : 'Marcar ' + U.esc(a.label) + ' como pulada') + '">' + icon(s === 'pulada' ? 'undo-2' : 'skip-forward', { size: 15 }) + '</button></li>';
   }
   function railHTML(inSheet) {
@@ -459,7 +535,8 @@
     var list = script.anchors.filter(function (a) {
       return st.filter === 'pendentes' ? st.anchors[a.id] === 'pendente' : st.filter === 'essenciais' ? a.priority === 'essencial' : true;
     });
-    var risk = list.filter(function (a) { return st.anchors[a.id] === 'pendente' && isPassed(a); });
+    var risk = list.filter(function (a) { return isBehind(a) || (st.off && st.bridge && st.bridge.anchorId === a.id && st.anchors[a.id] === 'pendente'); })
+      .sort(function (a, b) { return (b.priority === 'essencial') - (a.priority === 'essencial'); });
     var rest = list.filter(function (a) { return risk.indexOf(a) < 0; })
       .sort(function (a, b) { return anchorBlockIndex(a) - anchorBlockIndex(b) || (anchorOffset(a.id) || 0) - (anchorOffset(b.id) || 0); });
     var pct = c.total ? c.dita / c.total * 100 : 0;
@@ -472,7 +549,8 @@
           return '<button type="button" role="radio" data-filter="' + f[0] + '" aria-pressed="' + (st.filter === f[0]) + '" aria-checked="' + (st.filter === f[0]) + '">' + f[1] + '</button>';
         }).join('') + '</div>' +
       '<div class="rail-list">' +
-        (risk.length ? '<p class="rail-sec warn">Ficaram para trás</p><ul class="anchors">' + risk.map(function (a) { return anchorItem(a, true); }).join('') + '</ul>' : '') +
+        cutHTML() +
+        (risk.length ? '<p class="rail-sec warn">' + (st.off ? 'Para retomar' : 'Ficaram para trás') + '</p><ul class="anchors">' + risk.map(function (a) { return anchorItem(a, true); }).join('') + '</ul>' : '') +
         (rest.length ? (risk.length ? '<p class="rail-sec">No roteiro</p>' : '') + '<ul class="anchors">' + rest.map(function (a) { return anchorItem(a, false); }).join('') + '</ul>' : '') +
         (!list.length ? '<p class="muted rail-empty">' + (script.anchors.length ? 'Nada neste filtro.' : 'Este roteiro não tem âncoras. Marque-as no editor.') + '</p>' : '') +
       '</div>';
@@ -532,12 +610,104 @@
     ui.$('#c-anchors').focus();
   }
 
+  /* ---------------- plano de corte ---------------- */
+  function cutHTML() {
+    var c = st.cut;
+    if (!c) return '';
+    var blocks = (c.cuttableBlocks || []).slice(0, 3);
+    return '<div class="cut-note" role="status">' + icon('scissors', { size: 16 }) + '<div><b>Tempo apertado</b>' +
+      '<span>O texto que falta passa do tempo em cerca de ' + U.clock(c.deficitSec) + '. Mantenha as essenciais; as cortáveis podem sair.</span>' +
+      (blocks.length ? '<span>Blocos que podem sair: ' + blocks.map(function (b) { return U.esc(b.title) + ' (−' + U.clock(b.saveSec) + ')'; }).join(', ') + '</span>' : '') +
+      '</div></div>';
+  }
+
+  /* ---------------- improviso e cartão de ponte ---------------- */
+  function setOffScript(on, bridge) {
+    var same = on === st.off && JSON.stringify(bridge || null) === JSON.stringify(st.bridgeRaw || null);
+    if (same) return;
+    var was = st.off;
+    st.off = on; st.bridgeRaw = bridge || null;
+    if (on && (!st.bridge || !bridge || st.bridge.text !== bridge.text)) st.bridge = bridge;
+    if (!on) st.bridge = null;
+    el.stage.classList.toggle('is-offscript', on);
+    renderBridge(); renderSpeed();
+    if (was !== on) renderRail();
+  }
+  function renderBridge() {
+    var b = ui.$('#bridge'), br = st.bridge;
+    if (!br) { b.hidden = true; b.innerHTML = ''; return; }
+    var resume = br.resumeText && br.resumeText.length > 110 ? br.resumeText.slice(0, 107) + '…' : br.resumeText;
+    b.hidden = false;
+    b.innerHTML = '<div class="bridge-head">' + icon('message-square-quote', { size: 16 }) + '<span>Fora do roteiro · sugestão de ponte</span>' +
+        '<button type="button" class="icon-btn" data-dismiss aria-label="Dispensar sugestão">' + icon('x', { size: 16 }) + '</button></div>' +
+      '<p class="bridge-text">“' + U.esc(br.text) + '”</p>' +
+      (resume ? '<p class="bridge-resume"><small>Depois, retome em</small>' + U.esc(resume) + '</p>' : '') +
+      '<button type="button" class="btn btn-sm btn-primary" data-resume>' + icon('arrow-down', { size: 15 }) + 'Ir para o trecho</button>';
+  }
+  ui.$('#bridge').addEventListener('click', function (e) {
+    var br = st.bridge; if (!br) return;
+    if (e.target.closest('[data-resume]')) { goWord(br.resumeAt); st.bridge = null; renderBridge(); }
+    else if (e.target.closest('[data-dismiss]')) { st.bridge = null; renderBridge(); }
+  });
+  function goWord(k) {
+    setPos(yOfWord(k) + lineHeightPx() * 0.5 - lineY(), true);
+    updateCurrent(true);
+  }
+
+  /* ---------------- tempo real (backend) ---------------- */
+  var live = null;
+  function onTracker(m) {
+    var marked = false;
+    if (prefs.autoMark !== false) {
+      Object.keys(m.anchors || {}).forEach(function (id) {
+        if (m.anchors[id] === 'dita' && st.anchors[id] === 'pendente') { st.anchors[id] = 'dita'; st.auto[id] = true; marked = true; }
+      });
+    }
+    st.serverPos = { k: m.pos, at: Date.now() };
+    var behind = m.behind || [], cut = m.cutPlan && m.cutPlan.tight ? m.cutPlan : null;
+    var railChanged = marked || JSON.stringify(behind) !== JSON.stringify(st.behind) || JSON.stringify(cut) !== JSON.stringify(st.cut);
+    st.behind = behind; st.cut = cut;
+    setOffScript(!!m.offScript, m.offScript ? m.bridge : null);
+    if (marked) { refreshAnchorMarks(); persist(); }
+    if (railChanged) renderRail();
+  }
+  function connectLive() {
+    if (!GF.api.sync.enabled()) return;
+    live = GF.api.live(script.id, script);
+    live.on('tracker', onTracker);
+    live.on('speech:transcript', function (m) { if (auto.engine === 'deepgram') feedWords(m.text, m.final); });
+    live.on('speech:error', function (m) {
+      if (auto.engine !== 'deepgram') return;
+      stopCloud(); auto.cloudFailed = true; auto.source = null;
+      ui.toast((m.message || 'Falha na API de voz.') + ' Usando o reconhecimento do navegador.', 'info', 4500);
+      startAuto();
+    });
+    live.on('open', function () {
+      // reenvia o estado das âncoras marcadas antes da conexão
+      Object.keys(st.anchors).forEach(function (id) { if (st.anchors[id] !== 'pendente') live.send({ type: 'anchor', id: id, state: st.anchors[id] }); });
+      live.send({ type: 'position', wordIndex: wordAtLine() });
+      if (auto.on && st.running && auto.engine === 'navegador' && canCloud()) { stopVoice(); startAuto(); }
+    });
+    live.on('close', function () {
+      if (auto.engine === 'deepgram') { stopCloud(); auto.source = null; startAuto(); }
+      setOffScript(false, null);
+    });
+    live.on('script:updated', function (m) {
+      var fresh = Object.assign({}, m.script, { syncedAt: m.script.updatedAt });
+      S.putScript(fresh);
+      applyFresh(S.getScript(script.id) || fresh, m.by);
+    });
+  }
+
   /* ---------------- mudanças de última hora ---------------- */
-  // O editor salva no armazenamento local; o evento "storage" chega às outras abas.
+  // Mesmo navegador: o editor salva no armazenamento local e o evento "storage"
+  // chega às outras abas. Outro computador: chega pelo tempo real (script:updated).
   window.addEventListener('storage', function (e) {
     if (e.key !== 'globoflow:scripts') return;
     var fresh = S.getScript(script.id);
-    if (!fresh) return;
+    if (fresh) applyFresh(fresh);
+  });
+  function applyFresh(fresh, by) {
     var changedBlocks = [];
     fresh.blocks.forEach(function (nb) {
       var ob = script.blocks.filter(function (b) { return b.id === nb.id; })[0];
@@ -552,7 +722,8 @@
       if (blockIndexOf(c.id) !== st.cur && st.unseen.indexOf(c.id) < 0) st.unseen.push(c.id);
     });
     renderHeader(); renderScript(); renderRail(); renderUpdBanner();
-  });
+    if (by && changedBlocks.length) ui.toast('Roteiro atualizado por ' + U.esc(by) + '.', 'info', 3000);
+  }
   function newParts(a, b) {
     return GF.suggestions.diff(a, b).filter(function (p) { return p.t === 'ins' && p.v.trim().length > 3; }).map(function (p) { return p.v.trim(); });
   }
@@ -736,6 +907,7 @@
   renderPlay();
   layoutRail();
   renderTiming();
+  connectLive();
 
   /* sem roteiro: lista para escolher */
   function renderPicker() {

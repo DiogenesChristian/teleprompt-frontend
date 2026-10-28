@@ -84,4 +84,5 @@
   });
   document.addEventListener('click', function () { var m = ui.$('.row-menu'); if (m) m.remove(); });
   render();
+  window.addEventListener('gf:synced', render); // dados atualizados pelo servidor
 })(window.GF);

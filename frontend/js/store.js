@@ -3,7 +3,8 @@
  * Roteiros, sessões, preferências e usuário ficam no localStorage do
  * navegador. É o cache que mantém o teleprompter funcionando sem internet
  * (US06). Com o backend ligado (GF.config.API_BASE), js/api.js sincroniza
- * os roteiros com a API e usa este módulo como cópia local.
+ * roteiros e sessões com a API, e este módulo continua como cópia local
+ * (o teleprompter segue funcionando se a conexão cair).
  *
  * Se o localStorage estiver bloqueado (aba anônima, política do navegador),
  * os dados ficam só em memória até a página ser fechada.
@@ -144,10 +145,30 @@
     var i = list.findIndex(function (x) { return x.id === script.id; });
     if (i >= 0) list[i] = script; else list.unshift(script);
     write('scripts', list);
+    sync('pushScript', script);
     return script;
   }
   function deleteScript(id) {
     write('scripts', getScripts().filter(function (x) { return x.id !== id; }));
+    sync('removeScript', id);
+  }
+  /* Com o backend ligado, cada gravação local também vai para a API (js/api.js). */
+  function sync(fn, arg) {
+    var s = root.GF.api && root.GF.api.sync;
+    if (s && s.enabled()) { try { s[fn](clone(arg)); } catch (e) { /* segue local */ } }
+  }
+  /* Gravação vinda do servidor: não volta para o servidor. */
+  function putScripts(list) { write('scripts', list); }
+  function putScript(script) {
+    var list = getScripts(), i = list.findIndex(function (x) { return x.id === script.id; });
+    if (i >= 0) list[i] = script; else list.unshift(script);
+    write('scripts', list);
+  }
+  function markSynced(id, updatedAt) {
+    var list = getScripts(), s = list.filter(function (x) { return x.id === id; })[0];
+    if (!s) return;
+    s.syncedAt = updatedAt; s.updatedAt = updatedAt; // relógio do servidor é a referência
+    write('scripts', list);
   }
   function blankScript(partial) {
     var bid = util.uid('b');
@@ -174,7 +195,8 @@
 
   /* ---------- sessões (histórico de apresentações) ---------- */
   function getSessions() { return read('sessions', []).sort(function (a, b) { return b.startedAt - a.startedAt; }); }
-  function addSession(s) { var l = read('sessions', []); l.push(s); write('sessions', l); }
+  function addSession(s) { var l = read('sessions', []); l.push(s); write('sessions', l); sync('pushSession', s); }
+  function putSessions(list) { write('sessions', list); }
   function getActive() { return read('active', null); }
   function setActive(v) { if (v) write('active', v); else { rawDel('active'); write('activeCleared', Date.now()); } }
 
@@ -214,7 +236,7 @@
     init: init,
     getScripts: getScripts, getScript: getScript, saveScript: saveScript, deleteScript: deleteScript,
     createScript: createScript, blankScript: blankScript, duplicateScript: duplicateScript,
-    addRevision: addRevision,
+    addRevision: addRevision, putScripts: putScripts, putScript: putScript, markSynced: markSynced, putSessions: putSessions,
     getSessions: getSessions, addSession: addSession, getActive: getActive, setActive: setActive,
     currentUser: currentUser, setUser: setUser, logout: logout,
     getPrefs: getPrefs, setPrefs: setPrefs,

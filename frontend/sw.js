@@ -8,7 +8,7 @@
  * Os roteiros não passam pelo service worker: ficam no armazenamento local
  * do navegador (js/store.js).
  */
-const CACHE = 'globo-flow-v3';
+const CACHE = 'globo-flow-v4';
 const CORE = [
   './', 'index.html', 'login.html', 'editor.html', 'teleprompter.html',
   'historico.html', 'configuracoes.html', 'offline.html', 'manifest.webmanifest',
@@ -43,7 +43,7 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  // Chamadas à API (backend futuro) nunca vêm do cache.
+  // Chamadas à API nunca vêm do cache.
   if (url.pathname.includes('/api/')) return;
 
   if (req.mode === 'navigate') {

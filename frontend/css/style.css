@@ -557,3 +557,29 @@ ins.d { background: rgba(47, 191, 113, .2); color: #A6F0C6; text-decoration: non
 .auto-btn.is-on { background: var(--accent-soft); border-color: rgba(39, 136, 255, .5); color: var(--accent-ink); }
 .t-auto { flex: none; margin-left: auto; color: var(--accent-ink); font-weight: 600; }
 .t-auto + .t-state { margin-left: 12px; }
+
+/* ---------- improviso, ponte e plano de corte (tempo real com backend) ---------- */
+/* Fora do roteiro: o trecho atual esmaece para não "brigar" com o apresentador. */
+.stage.is-offscript .tp-block.is-current { opacity: .38; }
+.stage.is-offscript .reading-line::before, .stage.is-offscript .reading-line::after { border-left-color: var(--warn); border-right-color: var(--warn); }
+.bridge { position: absolute; z-index: 7; left: 0; right: 0; bottom: 18px; margin: 0 auto; width: min(560px, calc(100% - 24px)); display: grid; gap: 8px; padding: 12px 14px 14px; border-radius: var(--r-lg); background: var(--surface-2); border: 1px solid rgba(242, 178, 49, .45); box-shadow: var(--shadow); animation: fadeIn .25s both; }
+.bridge-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--warn-ink); }
+.bridge-head span { flex: 1; }
+.bridge-head .icon-btn { width: 32px; height: 32px; margin: -6px -6px -6px 0; }
+.bridge-text { margin: 0; font-size: clamp(18px, 2.2vw, 24px); font-weight: 700; line-height: 1.3; color: var(--fg); }
+.bridge-resume { margin: 0; font-size: 14px; color: var(--fg-2); display: grid; gap: 2px; }
+.bridge-resume small { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--mute); }
+.bridge .btn { justify-self: start; }
+/* Âncoras pendentes sobem na lista e pulsam de leve durante o improviso. */
+.anchor.is-pulse { animation: anchorPulse 1.8s ease-in-out infinite; }
+@keyframes anchorPulse { 0%, 100% { box-shadow: inset 0 0 0 1px rgba(242, 178, 49, .15); } 50% { box-shadow: inset 0 0 0 1px rgba(242, 178, 49, .7); } }
+@media (prefers-reduced-motion: reduce) { .anchor.is-pulse { animation: none; box-shadow: inset 0 0 0 1px rgba(242, 178, 49, .6); } }
+/* Tempo apertado: o que é essencial fica, o que é cortável pode sair. */
+.cut-note { display: flex; gap: 10px; align-items: flex-start; margin: 4px 0 8px; padding: 10px 12px; border-radius: var(--r); background: var(--crit-soft); color: var(--fg-2); font-size: 13px; line-height: 1.4; }
+.cut-note .ico { color: var(--crit-ink); flex: none; margin-top: 2px; }
+.cut-note div { display: grid; gap: 2px; }
+.cut-note b { color: var(--crit-ink); }
+.a-keep { color: var(--fg) !important; }
+.a-cut { color: var(--mute); }
+.anchor.is-cuttable .a-label { color: var(--mute); }
+.upd-banner:not([hidden]) ~ .bridge { bottom: 64px; }

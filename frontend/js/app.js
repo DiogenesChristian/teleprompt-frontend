@@ -207,7 +207,10 @@
   function boot(opts) {
     opts = opts || {};
     GF.store.init();
-    if (opts.guard !== false && !GF.store.currentUser()) {
+    var user = GF.store.currentUser();
+    // Com backend, só vale o login feito no servidor (com token).
+    if (user && GF.api.enabled() && !user.token) { GF.store.logout(); user = null; }
+    if (opts.guard !== false && !user) {
       var here = root.location.pathname.split('/').pop() + root.location.search;
       root.location.replace('login.html?next=' + encodeURIComponent(here || 'index.html'));
       return false;
@@ -222,6 +225,11 @@
     root.addEventListener('offline', net.emit);
     net.emit();
     registerSW();
+    // Sincroniza roteiros e histórico com o servidor; as telas escutam "gf:synced".
+    if (opts.page !== 'login') {
+      GF.api.sync.pull();
+      root.addEventListener('online', function () { GF.api.sync.pull(); });
+    }
     return true;
   }
 
