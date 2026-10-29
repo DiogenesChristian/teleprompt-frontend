@@ -12,7 +12,6 @@
   var ROLES = [
     { v: 'Apresentador', d: 'Lê o roteiro no ar' },
     { v: 'Jornalista / Editor', d: 'Prepara e aprova textos' },
-    { v: 'Operador de teleprompter', d: 'Controla a exibição' },
     { v: 'Produtor', d: 'Envia mudanças de pauta' }
   ];
   var current = GF.store.currentUser();

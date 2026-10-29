@@ -57,7 +57,7 @@
         if (res.status === 401 && path.indexOf('/api/auth/') !== 0) { expired(); throw ApiError('auth'); }
         return res.text().then(function (t) {
           var data = null; try { data = t ? JSON.parse(t) : null; } catch (e) { /* resposta sem JSON */ }
-          if (!res.ok) { var err = new Error((data && data.error) || 'HTTP ' + res.status); err.status = res.status; throw err; }
+          if (!res.ok) { var err = new Error((data && data.error) || 'HTTP ' + res.status); err.status = res.status; err.data = data; err.code = data && data.code; throw err; }
           return data;
         });
       });
@@ -153,6 +153,13 @@
         call('PUT', '/api/scripts/' + encodeURIComponent(script.id), script).then(function (data) {
           GF.store.markSynced(script.id, data.script.updatedAt);
         }, function (err) {
+          // 409: outra pessoa salvou antes. O servidor devolve a versão atual; ela substitui a deste aparelho.
+          if (err.status === 409 && err.data && err.data.script) {
+            GF.store.putScript(Object.assign(err.data.script, { syncedAt: err.data.script.updatedAt }));
+            try { root.dispatchEvent(new CustomEvent('gf:synced')); } catch (e) { /* noop */ }
+            notify(err.message, 'crit');
+            return;
+          }
           if (err.status === 403 && !quiet) notify(err.message + ' A alteração ficou só neste aparelho.', 'crit');
           // sem conexão: fica salvo aqui e sobe na próxima sincronização
         });
