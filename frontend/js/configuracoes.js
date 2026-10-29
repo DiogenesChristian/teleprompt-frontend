@@ -29,7 +29,7 @@
           '<div class="seg seg-full" role="radiogroup" aria-label="Contraste" id="s-ct">' +
             '<button type="button" data-v="padrao" aria-pressed="' + (p.contrast !== 'alto') + '">Contraste padrão</button>' +
             '<button type="button" data-v="alto" aria-pressed="' + (p.contrast === 'alto') + '">Alto contraste</button></div>' +
-          '<div>' + sw('s-mirror', 'Espelhar texto', p.mirror) + sw('s-line', 'Linha de leitura', p.readingLine) +
+          '<div>' + sw('s-upper', 'Texto em maiúsculas', p.upper !== false) + sw('s-mirror', 'Espelhar texto', p.mirror) + sw('s-line', 'Linha de leitura', p.readingLine) +
             sw('s-cues', 'Marcações técnicas', p.showCues) + sw('s-auto', 'Marcar âncora ao passar pela linha de leitura', p.autoMark !== false) + '</div>' +
         '</section>' +
 
@@ -79,7 +79,7 @@
     t.nextElementSibling.textContent = FMT[t.id](t.value);
   });
   ui.$('#main').addEventListener('change', function (e) {
-    var map = { 's-mirror': 'mirror', 's-line': 'readingLine', 's-cues': 'showCues', 's-auto': 'autoMark' };
+    var map = { 's-upper': 'upper', 's-mirror': 'mirror', 's-line': 'readingLine', 's-cues': 'showCues', 's-auto': 'autoMark' };
     if (map[e.target.id]) { var o = {}; o[map[e.target.id]] = e.target.checked; S.setPrefs(o); }
   });
   render();

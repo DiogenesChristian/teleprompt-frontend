@@ -247,7 +247,12 @@
     opts = opts || {};
     text = String(text || '');
     var n = text.length;
-    var anc = new Array(n), upd = new Array(n), cue = {};
+    var anc = new Array(n), upd = new Array(n), cov = new Array(n), cue = {};
+    // Nota coberta: trechos sublinhados (o apresentador narra sobre a imagem do VT).
+    (opts.covered || []).forEach(function (c) {
+      var i = c ? text.indexOf(c) : -1; if (i < 0) return;
+      for (var k = i; k < i + c.length; k++) cov[k] = true;
+    });
     (anchors || []).slice().sort(function (a, b) { return b.text.length - a.text.length; }).forEach(function (a) {
       if (!a.text) return;
       var i = text.indexOf(a.text);
@@ -264,14 +269,15 @@
     var out = '', i = 0;
     while (i < n) {
       if (cue[i]) { out += cueHTML(cue[i].label); i = cue[i].end; continue; }
-      var a = anc[i], u = upd[i], j = i;
-      while (j < n && anc[j] === a && upd[j] === u && !cue[j]) j++;
+      var a = anc[i], u = upd[i], c = cov[i], j = i;
+      while (j < n && anc[j] === a && upd[j] === u && cov[j] === c && !cue[j]) j++;
       var chunk = U.esc(text.slice(i, j));
       if (a) {
         var info = opts.anchorState ? opts.anchorState(a) : '';
         chunk = '<b class="anc ' + (info || '') + '" data-anchor="' + a + '"' + (j - i <= 24 ? ' style="white-space:nowrap"' : '') + '>' + chunk + '</b>';
       }
       if (u) chunk = '<span class="upd">' + chunk + '</span>';
+      if (c) chunk = '<span class="nc">' + chunk + '</span>';
       out += chunk;
       i = j;
     }

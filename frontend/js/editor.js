@@ -28,7 +28,6 @@
       '<div class="ed-top"><a class="back" href="index.html">' + icon('chevron-left', { size: 16 }) + 'Roteiros</a>' +
         '<div class="actions" style="align-items:center"><span class="save-state" id="save-state" role="status"></span>' +
           '<button type="button" class="icon-btn" id="btn-history" title="Alterações" aria-label="Alterações">' + icon('history', { size: 18 }) + '</button>' +
-          '<button type="button" class="btn" id="btn-save">Salvar</button>' +
           '<button type="button" class="btn btn-primary" id="btn-studio">' + icon('monitor-play', { size: 16 }) + '<span id="studio-label">Transmissão</span></button></div></div>' +
       '<label class="ed-label" for="f-title">Título principal</label>' +
       '<input class="title-input" id="f-title" placeholder="Assunto do roteiro" value="' + ui.esc(script.title) + '">' +
@@ -59,11 +58,19 @@
     '</div>';
 
   /* ---------------- salvar ---------------- */
-  function markDirty(content) { st.dirty = true; if (content) st.contentChanged = true; renderSaveState(); }
+  /* Salvamento automático: cada alteração é gravada logo depois que a pessoa
+   * para de digitar. Com o teleprompter aberto em outra tela, a mudança aparece
+   * lá na hora (mesmo navegador: evento "storage"; outro computador: backend). */
+  var AUTOSAVE_MS = 700, autoTimer = null;
+  function markDirty(content) {
+    st.dirty = true; if (content) st.contentChanged = true; renderSaveState();
+    clearTimeout(autoTimer);
+    autoTimer = setTimeout(function () { if (st.dirty) save(true); }, AUTOSAVE_MS);
+  }
   function renderSaveState() {
     var el = ui.$('#save-state');
     el.className = 'save-state' + (st.dirty ? ' is-dirty' : '');
-    el.textContent = st.dirty ? 'Não salvo' : 'Salvo às ' + U.time(script.updatedAt);
+    el.textContent = st.dirty ? 'Salvando…' : 'Salvo às ' + U.time(script.updatedAt);
   }
   function save(silent) {
     if (script.status === 'aprovado' && st.contentChanged) {
@@ -71,6 +78,7 @@
       script.status = 'em-revisao'; script.approvedBy = null; script.approvedAt = null;
       ui.toast('O texto mudou depois da aprovação. O roteiro voltou para revisão.', 'warn', 4500);
     }
+    clearTimeout(autoTimer);
     S.saveScript(script);
     st.dirty = false; st.contentChanged = false;
     renderSaveState(); renderApproval();
@@ -108,7 +116,7 @@
         return '<section class="pv-topic" id="pv-' + b.id + '">' +
           '<div class="pv-head"><span class="pv-num">Tópico ' + U.pad(i + 1) + '</span><span class="tc">' + U.clock(b.durationSec) + '</span></div>' +
           '<h2>' + (b.title.trim() ? ui.esc(b.title) : '<i>Sem título</i>') + '</h2>' +
-          '<p class="pv-text">' + (b.text.trim() ? GF.renderText(b.text, blockAnchors(b)) : '<span class="muted">Sem texto neste tópico.</span>') + '</p></section>';
+          '<p class="pv-text">' + (b.text.trim() ? GF.renderText(b.text, blockAnchors(b), { covered: coverTexts(b) }) : '<span class="muted">Sem texto neste tópico.</span>') + '</p></section>';
       }).join('') + '</article>';
   }
   function setMode(m) {
@@ -125,14 +133,24 @@
   /* ---------------- tópicos (blocos do roteiro) ---------------- */
   function getBlock(bid) { return script.blocks.filter(function (b) { return b.id === bid; })[0]; }
   function blockAnchors(b) { return script.anchors.filter(function (a) { return a.blockId === b.id; }); }
+  function blockCovers(b) { return (script.covers || []).filter(function (c) { return c.blockId === b.id; }); }
+  function coverTexts(b) { return blockCovers(b).map(function (c) { return c.text; }); }
   function blockEl(bid) { return ui.$('[data-block="' + bid + '"]'); }
 
   function statsHTML(b) {
     var est = U.estimateSec(b.text), over = est > b.durationSec * 1.1;
     return '<span class="block-stats' + (over ? ' warn' : '') + '" data-stats>' + U.words(b.text) + ' palavras · ~<span class="tc">' + U.clock(est) + '</span>' + (over ? ' · longo para o tópico' : '') + '</span>';
   }
+  function coverChipsHTML(b) {
+    return blockCovers(b).map(function (c) {
+      var missing = b.text.indexOf(c.text) < 0, short = c.text.length > 30 ? c.text.slice(0, 28) + '…' : c.text;
+      return '<span class="a-chip nc-chip' + (missing ? ' is-missing' : '') + '" title="Nota coberta' + (missing ? ' · trecho não encontrado no texto' : '') + '">' +
+        icon(missing ? 'triangle-alert' : 'clapperboard', { size: 14 }) + '<span class="nc-chip-t">' + ui.esc(short) + '</span>' +
+        '<button type="button" class="x" data-rm-cover="' + c.id + '" aria-label="Remover nota coberta">' + icon('x', { size: 14 }) + '</button></span>';
+    }).join('');
+  }
   function chipsHTML(b) {
-    return blockAnchors(b).map(function (a) {
+    return coverChipsHTML(b) + blockAnchors(b).map(function (a) {
       var t = GF.ANCHOR_TYPES[a.type] || GF.ANCHOR_TYPES.obrigatoria;
       var missing = b.text.indexOf(a.text) < 0;
       return '<span class="a-chip' + (missing ? ' is-missing' : '') + '" title="' + ui.esc(t.label + (a.priority === 'essencial' ? ' · essencial' : ' · cortável') + (missing ? ' · trecho não encontrado no texto' : '')) + '">' +
@@ -155,6 +173,7 @@
       '<textarea class="textarea" id="tx-' + b.id + '" data-field="text" placeholder="Texto do tópico: o que o apresentador vai ler">' + ui.esc(b.text) + '</textarea>' +
       '<div class="block-tools">' +
         '<button type="button" class="btn btn-sm" data-act="anchor" disabled title="Selecione um trecho do texto">' + icon('anchor', { size: 14 }) + 'Marcar âncora</button>' +
+        '<button type="button" class="btn btn-sm" data-act="cover" disabled title="Selecione o trecho narrado sobre a imagem do VT">' + icon('clapperboard', { size: 14 }) + 'Nota coberta</button>' +
         '<label class="sr-only" for="cue-' + b.id + '">Inserir marcação técnica</label>' +
         '<select class="select" id="cue-' + b.id + '" data-cue><option value="">Inserir marcação</option>' + CUES.map(function (c) { return '<option value="' + c + '">[' + c + ']</option>'; }).join('') + '</select>' +
         statsHTML(b) + '</div>' +
@@ -199,6 +218,7 @@
     var s = e.target.selectionStart, en = e.target.selectionEnd;
     st.sel[bid] = e.target.value.slice(s, en).trim() ? [s, en] : null;
     ui.$('[data-act=anchor]', blockEl(bid)).disabled = !st.sel[bid];
+    ui.$('[data-act=cover]', blockEl(bid)).disabled = !st.sel[bid];
   }
   ['select', 'keyup', 'mouseup'].forEach(function (ev) { blocksEl.addEventListener(ev, trackSel); });
   blocksEl.addEventListener('click', function (e) {
@@ -214,9 +234,12 @@
         if (!ok) return;
         script.blocks.splice(i, 1);
         script.anchors = script.anchors.filter(function (a) { return a.blockId !== b.id; });
+        script.covers = (script.covers || []).filter(function (c) { return c.blockId !== b.id; });
         markDirty(true); renderBlocks();
       });
     } else if (act === 'anchor') anchorModal(b, null);
+    else if (act === 'cover') markCover(b);
+    else if (btn.dataset.rmCover) { script.covers = (script.covers || []).filter(function (c) { return c.id !== btn.dataset.rmCover; }); markDirty(true); refreshBlock(b); }
     else if (btn.dataset.rm) { script.anchors = script.anchors.filter(function (a) { return a.id !== btn.dataset.rm; }); markDirty(false); refreshBlock(b); }
     else if (btn.dataset.editAnchor) anchorModal(b, script.anchors.filter(function (a) { return a.id === btn.dataset.editAnchor; })[0]);
   });
@@ -225,6 +248,23 @@
     script.blocks.push(b); markDirty(true); renderBlocks();
     var t = ui.$('#bt-' + b.id); t.focus(); t.select();
   });
+
+  /* ---------------- nota coberta ----------------
+   * Trecho que o apresentador lê enquanto o vídeo (VT) cobre a imagem. Aparece
+   * sublinhado no teleprompter, para o DTV saber quando inserir a imagem. */
+  function markCover(b) {
+    var ta = ui.$('#tx-' + b.id), sel = st.sel[b.id];
+    var text = sel ? ta.value.slice(sel[0], sel[1]).trim() : '';
+    if (!text) return;
+    script.covers = (script.covers || []).filter(function (c) {
+      return c.blockId !== b.id || (b.text.indexOf(c.text) < 0 ? true : !(text.indexOf(c.text) >= 0 || c.text.indexOf(text) >= 0));
+    });
+    script.covers.push({ id: U.uid('nc'), blockId: b.id, text: text });
+    st.sel[b.id] = null;
+    ui.$('[data-act=cover]', blockEl(b.id)).disabled = true;
+    ui.$('[data-act=anchor]', blockEl(b.id)).disabled = true;
+    markDirty(true); refreshBlock(b);
+  }
 
   /* ---------------- âncoras ---------------- */
   function guessType(t) {
@@ -430,7 +470,6 @@
   });
 
   /* ---------------- ações ---------------- */
-  ui.$('#btn-save').addEventListener('click', function () { save(); });
   // Se este roteiro já está numa transmissão em andamento (sessão salva no aparelho),
   // o botão volta para ela; o teleprompter retoma tempo, âncoras e posição no texto.
   function renderStudioBtn() {
@@ -440,7 +479,21 @@
   }
   ui.$('#btn-studio').addEventListener('click', function () { if (st.dirty) save(true); location.href = 'teleprompter.html?id=' + script.id; });
   document.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); } });
-  window.addEventListener('beforeunload', function (e) { if (st.dirty) { e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('pagehide', function () { if (st.dirty) save(true); });
+  // Outra aba (ex.: painel de edição do teleprompter) salvou este roteiro: atualiza aqui se não houver nada pendente.
+  window.addEventListener('storage', function (e) {
+    if (e.key !== 'globoflow:scripts' || st.dirty) return;
+    var fresh = S.getScript(script.id); if (!fresh) return;
+    var sig = function (x) { return JSON.stringify([x.title, x.blocks, x.anchors, x.covers || [], x.status]); };
+    if (sig(fresh) === sig(script)) return;
+    var a = document.activeElement, aid = a && a.id, s0 = a && a.selectionStart, s1 = a && a.selectionEnd;
+    script = fresh;
+    ui.$('#f-title').value = script.title;
+    renderBlocks(); renderSaveState(); renderApproval();
+    if (st.mode === 'preview') renderPreview();
+    var back = aid && document.getElementById(aid);
+    if (back) { back.focus({ preventScroll: true }); try { back.setSelectionRange(s0, s1); } catch (err) { /* campo sem seleção */ } }
+  });
   GF.net.on(function () { if (st.review.status !== 'loading') renderAI(); });
 
   renderBlocks();

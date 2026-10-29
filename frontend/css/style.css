@@ -129,7 +129,15 @@ label { font-size: 13px; color: var(--fg-2); font-weight: 500; }
 .switch input:checked + .track { background: var(--accent); }
 .switch input:checked + .track::after { transform: translateX(16px); background: #fff; }
 .switch input:focus-visible + .track { box-shadow: var(--focus); }
-input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; }
+/* controle deslizante com o visual do Globo Flow (igual em qualquer navegador) */
+input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 28px; margin: 0; background: transparent; cursor: pointer; }
+input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 99px; background: var(--surface-3); }
+input[type=range]::-moz-range-track { height: 4px; border-radius: 99px; background: var(--surface-3); }
+input[type=range]::-moz-range-progress { height: 4px; border-radius: 99px; background: var(--accent); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; margin-top: -6px; border: 0; border-radius: 50%; background: var(--fg); box-shadow: 0 0 0 4px var(--accent-soft); }
+input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border: 0; border-radius: 50%; background: var(--fg); box-shadow: 0 0 0 4px var(--accent-soft); }
+input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--accent); }
+input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 4px var(--accent); }
 .range-row { display: grid; grid-template-columns: minmax(0, 1fr) 52px; gap: 12px; align-items: center; }
 .range-row output { font: 600 14px var(--mono); text-align: right; }
 
@@ -670,3 +678,39 @@ ins.d { background: rgba(47, 191, 113, .2); color: #A6F0C6; text-decoration: non
 .studio-page .app { position: fixed; inset: 0; }
 @media (max-width: 599px) { .le-head { padding: 10px 14px 6px; } .le-body { padding: 4px 14px 12px; } }
 
+
+/* ---------- padrão da redação: retranca, nota coberta e maiúsculas ---------- */
+/* Retranca: assunto em caixa clara no topo de cada tópico ("[09]PREVISÃO DO TEMPO"). */
+.retranca { display: inline-block; max-width: 100%; padding: .12em .45em; border-radius: 3px; background: #F2F4F7; color: #0B0D10; font-weight: 700; text-transform: uppercase; letter-spacing: 0; overflow-wrap: anywhere; }
+.tp-head { margin-bottom: .35em; font-size: max(15px, calc(var(--fs, 48px) * .42)); letter-spacing: 0; text-transform: none; }
+.tp-head .retranca { line-height: 1.25; }
+.tb-title.retranca { font-size: 17px; padding: 3px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 767px) { .tb-title.retranca { font-size: 15px; } }
+/* Nota coberta: trecho sublinhado, lido enquanto a imagem do VT entra. */
+.nc { text-decoration: underline; text-decoration-thickness: .06em; text-underline-offset: .14em; text-decoration-skip-ink: none; }
+.pv-text .nc, .tp-text .nc { text-decoration-color: currentColor; }
+/* no alto contraste, âncora deixa de ser sublinhada para não confundir com nota coberta */
+.contrast-alto .anc { text-decoration: none; color: #fff; }
+.nc-chip { box-shadow: inset 0 -2px 0 var(--fg-2); }
+.nc-chip-t { max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+/* texto do teleprompter em maiúsculas (ajuste de leitura, ligado por padrão) */
+.tp-upper .tp-text { text-transform: uppercase; }
+.le-state { font-size: 12px; }
+.le-foot { padding-top: 10px; padding-bottom: calc(10px + var(--sab)); }
+/* centraliza o aviso de atualização sem depender de transform (a animação fadeIn zera o transform) */
+.upd-banner { left: 0; right: 0; margin: 0 auto; width: fit-content; transform: none; }
+
+/* ---------- modo bloqueio: só o texto do teleprompter ---------- */
+.is-locked .sidebar, .is-locked .studio-bar, .is-locked .topic-bar, .is-locked .timing,
+.is-locked .rail, .is-locked .live-edit, .is-locked .upd-banner, .is-locked .bridge, .is-locked .toasts { display: none !important; }
+.is-locked .studio { grid-template-rows: minmax(0, 1fr); }
+.is-locked .studio-body { grid-template-columns: minmax(0, 1fr) !important; }
+.lock-shield { position: absolute; inset: 0; z-index: 40; cursor: default; touch-action: none; }
+.lock-exit { position: absolute; right: max(14px, var(--sar)); bottom: calc(14px + var(--sab)); display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px; overflow: hidden; border: 1px solid var(--line); border-radius: 99px; background: rgba(23, 26, 32, .7); color: var(--faint); font: 500 12px var(--font); opacity: .45; transition: opacity .2s; user-select: none; -webkit-user-select: none; touch-action: none; cursor: pointer; }
+.lock-exit:hover, .lock-exit:focus-visible, .lock-exit.is-holding { opacity: 1; color: var(--fg); }
+.lock-exit > :not(.lock-fill) { position: relative; }
+.lock-fill { position: absolute; inset: 0; width: 0; background: var(--accent-soft); }
+.lock-exit.is-holding .lock-fill { width: 100%; transition: width 1.5s linear; }
+@media (max-width: 599px) { .lock-txt { display: none; } .lock-exit { padding: 0 11px; } }
+/* celular: âncora longa pode quebrar linha (em maiúsculas ela não cabe inteira) */
+@media (max-width: 599px) { .tp-text .anc { white-space: normal !important; } }
