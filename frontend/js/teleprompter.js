@@ -797,8 +797,9 @@
     if (!st.voiceLost) return;
     st.voiceLost = false;
     auto.voiceFailed = false; auto.cloudFailed = false;
+    // no manual (rolando ou pausado), só avisa: quem decide religar é o operador
+    if (!auto.on) { if (st.started) ui.toast('A voz voltou. Você continua no manual; aperte Auto para ela guiar de novo.', 'info', 6000); return; }
     if (!st.running) return;
-    if (!auto.on) { ui.toast('A voz voltou. Você continua no manual; aperte Auto para ela guiar de novo.', 'info', 4500); return; }
     if (auto.source === 'tempo') { auto.source = null; startAuto(); ui.toast('A voz voltou: a rolagem segue a fala de novo.', 'ok', 3000); }
   }
   window.addEventListener('offline', function () { if (auto.on && auto.source === 'voz') st.voiceLost = true; });
@@ -1223,18 +1224,20 @@
   function showKeys() {
     ui.modal({
       title: 'Atalhos de teclado',
-      body: '<div class="shortcuts">' + [
-        ['Espaço', 'Iniciar e pausar'], ['↑ ↓', 'Velocidade'], ['V', 'Velocidade automática'], ['+ −', 'Tamanho da fonte'], ['→ ←', 'Próximo e anterior tópico'], ['E', 'Editar roteiro sem parar'],
-        ['Home', 'Voltar ao início'], ['D', 'Âncora mais próxima: dita'], ['S', 'Âncora mais próxima: pulada'],
+      body: '<div class="shortcuts">' + GF.keys.ACTIONS.map(function (a) { return [GF.keys.label(keyMap[a.id]), a.label]; }).concat([
+        ['V', 'Velocidade automática'], ['+ −', 'Tamanho da fonte'], ['E', 'Editar roteiro sem parar'],
+        ['D', 'Âncora mais próxima: dita'], ['S', 'Âncora mais próxima: pulada'],
         ['A', 'Lista de âncoras'], ['M', 'Espelhar'], ['F', 'Tela cheia'], ['L', 'Modo bloqueio (segure Esc para sair)'], ['Esc', 'Fechar painéis']
-      ].map(function (k) { return '<div><span>' + k[1] + '</span><span>' + k[0].split(' ').map(function (x) { return '<span class="kbd">' + x + '</span>'; }).join(' ') + '</span></div>'; }).join('') + '</div>',
+      ]).map(function (k) { return '<div><span>' + k[1] + '</span><span>' + (k[0] === '+ −' ? '<span class="kbd">+</span> <span class="kbd">−</span>' : '<span class="kbd">' + U.esc(k[0]) + '</span>') + '</span></div>'; }).join('') + '</div>' +
+        '<p class="field-hint">' + (prefs.lockKeys === false ? 'No modo bloqueio, as teclas estão desligadas.' : 'No modo bloqueio, as teclas de leitura continuam funcionando, sem mostrar nada na tela.') + ' Para trocar as teclas, vá em Configurações.</p>',
       actions: [{ label: 'Fechar', tone: 'primary' }]
     });
   }
   /* ---------------- modo bloqueio ----------------
-   * Só o texto na tela: some menu, barras, painéis e controles, e cliques ou
-   * teclas não mudam nada (o teleprompter continua como estava, rodando ou
-   * pausado). Sair: segurar o cadeado ou a tecla Esc por 1,5 s. */
+   * Só o texto na tela: some menu, barras, painéis e controles, e cliques não
+   * mudam nada. As teclas de leitura (pausar, avançar, velocidade, voltar ao
+   * início — configuráveis em Configurações) continuam funcionando, sem mostrar
+   * nada na tela. Sair: segurar o cadeado ou a tecla Esc por 1,5 s. */
   var lock = { on: false, timer: null, fs: false };
   var HOLD_MS = 1500;
   function setLock(on) {
@@ -1311,8 +1314,34 @@
   document.addEventListener('click', function (e) {
     if (st.pop && !e.target.closest('#pop, #btn-settings, #c-more')) closePop();
   });
+  /* Ações de leitura com tecla configurável (Configurações → Atalhos). */
+  var keyMap = GF.keys.map(prefs);
+  function runKey(act) {
+    if (act === 'toggle') toggle();
+    else if (act === 'faster') setSpeed(prefs.speed + 1);
+    else if (act === 'slower') setSpeed(prefs.speed - 1);
+    else if (act === 'next') goBlock(st.cur + 1);
+    else if (act === 'prev') goBlock(st.cur - 1);
+    else if (act === 'forward' || act === 'back') { setPos(st.pos + (act === 'forward' ? 1 : -1) * lineHeightPx() * 2, true); updateCurrent(true); }
+    else if (act === 'restart') { setPos(0, true); updateCurrent(true); }
+  }
+  // atalhos trocados em outra aba (Configurações) valem na hora
+  window.addEventListener('storage', function (e) {
+    if (e.key !== 'globoflow:prefs') return;
+    var np = S.getPrefs(); prefs.keys = np.keys; prefs.lockKeys = np.lockKeys;
+    keyMap = GF.keys.map(prefs);
+  });
+
   document.addEventListener('keydown', function (e) {
-    if (lock.on) { e.preventDefault(); if (e.key === 'Escape' && !e.repeat) holdStart(); return; }
+    if (lock.on) {
+      // bloqueado: só as teclas de leitura funcionam, sem mostrar nada; segurar Esc desbloqueia
+      e.preventDefault();
+      if (e.key === 'Escape') { if (!e.repeat) holdStart(); return; }
+      if (prefs.lockKeys === false || e.ctrlKey || e.metaKey || e.altKey) return;
+      var la = GF.keys.action(keyMap, e.key);
+      if (la && !(e.repeat && (la === 'toggle' || la === 'restart'))) runKey(la);
+      return;
+    }
     if (document.body.classList.contains('has-modal')) return;
     // Dentro do painel de edição, as teclas são do formulário (Esc fecha o painel).
     if (e.target.closest && e.target.closest('#live-edit')) { if (e.key === 'Escape') closeEdit(); return; }
@@ -1321,13 +1350,12 @@
     var k = e.key;
     if (k === 'Escape') { if (st.pop) closePop(); else if (st.sheet) closeSheet(); else if (st.drawer) { st.drawer = false; layoutRail(); } else if (ed.open) closeEdit(); return; }
     if (k === 'e' || k === 'E') { e.preventDefault(); openEdit(); return; }
-    if (k === ' ' && tag !== 'button') { e.preventDefault(); toggle(); }
-    else if (k === 'ArrowUp') { e.preventDefault(); setSpeed(prefs.speed + 1); }
-    else if (k === 'ArrowDown') { e.preventDefault(); setSpeed(prefs.speed - 1); }
-    else if (k === 'ArrowRight' || k === 'PageDown') { e.preventDefault(); goBlock(st.cur + 1); }
-    else if (k === 'ArrowLeft' || k === 'PageUp') { e.preventDefault(); goBlock(st.cur - 1); }
-    else if (k === 'Home') { e.preventDefault(); setPos(0, true); updateCurrent(true); }
-    else if (k === '+' || k === '=') setPref('fontSize', Math.min(96, prefs.fontSize + 4));
+    var act = GF.keys.action(keyMap, k);
+    if (act) {
+      if (act === 'toggle' && tag === 'button') return; // espaço num botão aperta o botão
+      e.preventDefault(); if (!(e.repeat && (act === 'toggle' || act === 'restart'))) runKey(act); return;
+    }
+    if (k === '+' || k === '=') setPref('fontSize', Math.min(96, prefs.fontSize + 4));
     else if (k === '-' || k === '_') setPref('fontSize', Math.max(24, prefs.fontSize - 4));
     else if (k === 'd' || k === 'D') markNearest('dita');
     else if (k === 's' || k === 'S') markNearest('pulada');

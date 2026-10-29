@@ -12,6 +12,45 @@
   var FMT = { 's-font': function (v) { return v + 'px'; }, 's-speed': function (v) { return v; }, 's-lh': function (v) { return (+v).toFixed(1); } };
   var KEY = { 's-font': 'fontSize', 's-speed': 'speed', 's-lh': 'lineHeight' };
 
+  /* ---------- atalhos configuráveis ---------- */
+  var capturing = null; // id da ação esperando a tecla nova
+  function keyRowsHTML(p) {
+    var m = GF.keys.map(p);
+    return GF.keys.ACTIONS.map(function (a) {
+      var wait = capturing === a.id;
+      return '<div class="key-row"><span>' + a.label + '</span>' +
+        '<span class="kbd' + (wait ? ' is-wait' : '') + '">' + (wait ? 'aperte uma tecla…' : ui.esc(GF.keys.label(m[a.id]))) + '</span>' +
+        '<button type="button" class="btn btn-sm" data-key="' + a.id + '" aria-label="Alterar tecla de ' + a.label + '">' + (wait ? 'Cancelar' : 'Alterar') + '</button></div>';
+    }).join('');
+  }
+  function renderKeys() { ui.$('#key-list').innerHTML = keyRowsHTML(S.getPrefs()); }
+  function saveKey(id, key) {
+    var p = S.getPrefs(), m = GF.keys.map(p), k = GF.keys.norm(key);
+    if (GF.keys.FIXED[k]) { ui.toast('A tecla ' + ui.esc(GF.keys.label(k)) + ' já é usada para ' + GF.keys.FIXED[k] + '.', 'warn'); return false; }
+    var other = GF.keys.action(m, k), msg = '';
+    if (other && other !== id) { // troca: a outra ação fica com a tecla antiga desta
+      m[other] = m[id];
+      msg = ' Trocada com "' + GF.keys.ACTIONS.filter(function (a) { return a.id === other; })[0].label + '".';
+    }
+    m[id] = k;
+    S.setPrefs({ keys: m });
+    ui.toast('Atalho salvo.' + msg, 'ok', 2200);
+    return true;
+  }
+  document.addEventListener('keydown', function (e) {
+    if (!capturing) return;
+    e.preventDefault(); e.stopPropagation();
+    if (e.key === 'Escape') { capturing = null; renderKeys(); return; }
+    if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].indexOf(e.key) >= 0) return;
+    var id = capturing;
+    if (saveKey(id, e.key)) { capturing = null; renderKeys(); var b = ui.$('[data-key="' + id + '"]'); if (b) b.focus(); }
+  }, true);
+  ui.$('#main').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-key]');
+    if (b) { capturing = capturing === b.dataset.key ? null : b.dataset.key; renderKeys(); var nb = ui.$('[data-key="' + b.dataset.key + '"]'); if (nb) nb.focus(); return; }
+    if (e.target.closest('#keys-reset')) { capturing = null; S.setPrefs({ keys: {} }); renderKeys(); ui.toast('Atalhos padrão restaurados.', 'ok', 2200); }
+  });
+
   function render() {
     var p = S.getPrefs(), u = S.currentUser(), info = S.storageInfo();
     ui.$('#main').innerHTML =
@@ -41,10 +80,16 @@
             '<button type="button" class="btn btn-sm btn-danger" id="btn-clear">Apagar dados locais</button></div>' +
         '</section>' +
 
-        '<section class="card"><h2>Atalhos do teleprompter</h2><div class="shortcuts">' + [
-          ['Espaço', 'Iniciar e pausar'], ['↑ ↓', 'Velocidade'], ['+ −', 'Tamanho da fonte'], ['→ ←', 'Próximo e anterior bloco'],
-          ['D', 'Âncora mais próxima: dita'], ['S', 'Âncora mais próxima: pulada'], ['A', 'Lista de âncoras'], ['M', 'Espelhar'], ['F', 'Tela cheia']
-        ].map(function (k) { return '<div><span>' + k[1] + '</span><span>' + k[0].split(' ').map(function (x) { return '<span class="kbd">' + x + '</span>'; }).join(' ') + '</span></div>'; }).join('') + '</div></section>' +
+        '<section class="card" aria-labelledby="h-keys"><div class="card-head"><h2 id="h-keys">Atalhos do teleprompter</h2>' +
+          '<button type="button" class="btn btn-sm btn-ghost" id="keys-reset">Restaurar padrão</button></div>' +
+          sw('s-lockkeys', 'Funcionar também no modo bloqueio (sem aparecer nada na tela)', p.lockKeys !== false) +
+          '<div class="key-list" id="key-list">' + keyRowsHTML(p) + '</div>' +
+          '<p class="field-hint">Para trocar, clique em Alterar e aperte a tecla nova. Esc cancela.</p>' +
+          '<details class="key-fixed"><summary>Outras teclas (fixas)</summary><div class="shortcuts">' + [
+            ['E', 'Editar roteiro'], ['V', 'Velocidade automática'], ['+ −', 'Tamanho da fonte'], ['D', 'Âncora mais próxima: dita'], ['S', 'Âncora mais próxima: pulada'],
+            ['A', 'Lista de âncoras'], ['M', 'Espelhar'], ['F', 'Tela cheia'], ['L', 'Modo bloqueio'], ['Esc', 'Segurar para sair do bloqueio']
+          ].map(function (k) { return '<div><span>' + k[1] + '</span><span>' + k[0].split(' ').map(function (x) { return '<span class="kbd">' + x + '</span>'; }).join(' ') + '</span></div>'; }).join('') + '</div></details>' +
+        '</section>' +
       '</div>';
 
     ui.$('#s-ct').addEventListener('click', function (e) {
@@ -79,7 +124,7 @@
     t.nextElementSibling.textContent = FMT[t.id](t.value);
   });
   ui.$('#main').addEventListener('change', function (e) {
-    var map = { 's-upper': 'upper', 's-mirror': 'mirror', 's-line': 'readingLine', 's-cues': 'showCues', 's-auto': 'autoMark' };
+    var map = { 's-lockkeys': 'lockKeys', 's-upper': 'upper', 's-mirror': 'mirror', 's-line': 'readingLine', 's-cues': 'showCues', 's-auto': 'autoMark' };
     if (map[e.target.id]) { var o = {}; o[map[e.target.id]] = e.target.checked; S.setPrefs(o); }
   });
   render();

@@ -719,3 +719,12 @@ ins.d { background: rgba(47, 191, 113, .2); color: #A6F0C6; text-decoration: non
 .ctl-play.is-arming { background: var(--surface-2); border-color: rgba(39, 136, 255, .6); color: var(--accent-ink); }
 .ctl-play.is-arming .ico { animation: pulse 1.2s infinite; }
 @media (prefers-reduced-motion: reduce) { .ctl-play.is-arming .ico { animation: none; } }
+
+/* configurações: atalhos editáveis */
+.key-list { display: grid; gap: 2px; }
+.key-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; min-height: 44px; padding: 2px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.key-row:first-child { border-top: 0; }
+.key-row .kbd { min-width: 64px; }
+.key-row .kbd.is-wait { color: var(--accent-ink); border-color: var(--accent); background: var(--accent-soft); font-family: var(--font); font-weight: 500; }
+.key-fixed summary { cursor: pointer; font-size: 13px; color: var(--mute); padding: 4px 0 10px; }
+.key-fixed summary:hover { color: var(--fg); }

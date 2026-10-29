@@ -284,6 +284,46 @@
     return out;
   }
 
+  /* ---------- atalhos de teclado do teleprompter ----------
+   * As ações de controle da leitura podem ter a tecla trocada em Configurações
+   * (prefs.keys) e funcionam também no modo bloqueio (prefs.lockKeys), sem
+   * mostrar nada na tela. As demais teclas são fixas. */
+  var KEY_ACTIONS = [
+    { id: 'toggle', label: 'Pausar / continuar', def: ' ' },
+    { id: 'faster', label: 'Mais rápido', def: 'arrowup' },
+    { id: 'slower', label: 'Mais devagar', def: 'arrowdown' },
+    { id: 'next', label: 'Próximo tópico', def: 'arrowright' },
+    { id: 'prev', label: 'Tópico anterior', def: 'arrowleft' },
+    { id: 'forward', label: 'Adiantar um pouco o texto', def: 'pagedown' },
+    { id: 'back', label: 'Recuar um pouco o texto', def: 'pageup' },
+    { id: 'restart', label: 'Voltar ao início', def: 'home' }
+  ];
+  // teclas que já têm outra função fixa no teleprompter (não podem ser escolhidas)
+  var KEY_FIXED = {
+    'e': 'Editar roteiro', 'v': 'Velocidade automática', '+': 'Tamanho da fonte', '=': 'Tamanho da fonte',
+    '-': 'Tamanho da fonte', '_': 'Tamanho da fonte', 'd': 'Âncora dita', 's': 'Âncora pulada',
+    'a': 'Lista de âncoras', 'm': 'Espelhar', 'f': 'Tela cheia', 'l': 'Modo bloqueio', '?': 'Lista de atalhos',
+    'escape': 'Fechar painéis e sair do bloqueio', 'tab': 'Navegação do teclado', 'enter': 'Botões'
+  };
+  var KEY_NAMES = { ' ': 'Espaço', 'arrowup': '↑', 'arrowdown': '↓', 'arrowleft': '←', 'arrowright': '→',
+    'pageup': 'Page Up', 'pagedown': 'Page Down', 'home': 'Home', 'end': 'End', 'backspace': 'Backspace', 'delete': 'Delete', 'insert': 'Insert' };
+  var keys = {
+    ACTIONS: KEY_ACTIONS, FIXED: KEY_FIXED,
+    norm: function (k) { k = String(k || ''); if (k === 'Spacebar') k = ' '; return k.length === 1 ? k.toLowerCase() : k.toLowerCase(); },
+    label: function (k) { k = keys.norm(k); return KEY_NAMES[k] || (k.length === 1 ? k.toUpperCase() : k.charAt(0).toUpperCase() + k.slice(1)); },
+    map: function (prefs) {
+      var m = {}, custom = (prefs && prefs.keys) || {};
+      KEY_ACTIONS.forEach(function (a) { m[a.id] = keys.norm(custom[a.id] || a.def); });
+      return m;
+    },
+    action: function (map, key) {
+      var k = keys.norm(key);
+      for (var id in map) if (map[id] === k) return id;
+      return null;
+    }
+  };
+
+  GF.keys = keys;
   GF.renderText = renderText;
   GF.ui = ui;
   GF.net = net;
