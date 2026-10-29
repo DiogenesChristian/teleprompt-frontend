@@ -699,3 +699,18 @@ ins.d { background: rgba(47, 191, 113, .2); color: #A6F0C6; text-decoration: non
 .le-foot { padding-top: 10px; padding-bottom: calc(10px + var(--sab)); }
 /* centraliza o aviso de atualização sem depender de transform (a animação fadeIn zera o transform) */
 .upd-banner { left: 0; right: 0; margin: 0 auto; width: fit-content; transform: none; }
+
+/* ---------- modo bloqueio: só o texto do teleprompter ---------- */
+.is-locked .sidebar, .is-locked .studio-bar, .is-locked .topic-bar, .is-locked .timing,
+.is-locked .rail, .is-locked .live-edit, .is-locked .upd-banner, .is-locked .bridge, .is-locked .toasts { display: none !important; }
+.is-locked .studio { grid-template-rows: minmax(0, 1fr); }
+.is-locked .studio-body { grid-template-columns: minmax(0, 1fr) !important; }
+.lock-shield { position: absolute; inset: 0; z-index: 40; cursor: default; touch-action: none; }
+.lock-exit { position: absolute; right: max(14px, var(--sar)); bottom: calc(14px + var(--sab)); display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px; overflow: hidden; border: 1px solid var(--line); border-radius: 99px; background: rgba(23, 26, 32, .7); color: var(--faint); font: 500 12px var(--font); opacity: .45; transition: opacity .2s; user-select: none; -webkit-user-select: none; touch-action: none; cursor: pointer; }
+.lock-exit:hover, .lock-exit:focus-visible, .lock-exit.is-holding { opacity: 1; color: var(--fg); }
+.lock-exit > :not(.lock-fill) { position: relative; }
+.lock-fill { position: absolute; inset: 0; width: 0; background: var(--accent-soft); }
+.lock-exit.is-holding .lock-fill { width: 100%; transition: width 1.5s linear; }
+@media (max-width: 599px) { .lock-txt { display: none; } .lock-exit { padding: 0 11px; } }
+/* celular: âncora longa pode quebrar linha (em maiúsculas ela não cabe inteira) */
+@media (max-width: 599px) { .tp-text .anc { white-space: normal !important; } }

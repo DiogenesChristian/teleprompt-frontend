@@ -85,6 +85,7 @@
         '<button type="button" class="icon-btn" id="btn-rail" aria-label="Âncoras (A)" title="Âncoras (A)">' + icon('anchor') + '</button>' +
         '<button type="button" class="icon-btn desk-only" id="btn-settings" aria-haspopup="true" aria-label="Ajustes de leitura" title="Ajustes de leitura">' + icon('type') + '</button>' +
         '<button type="button" class="icon-btn desk-only" id="btn-full" aria-label="Tela cheia (F)" title="Tela cheia (F)">' + icon('maximize') + '</button>' +
+        '<button type="button" class="icon-btn" id="btn-lock" aria-label="Modo bloqueio (L)" title="Modo bloqueio: só o texto na tela (L)">' + icon('lock') + '</button>' +
       '</div>' +
     '</header>' +
     '<nav class="topic-bar" id="topic-bar" aria-label="Tópicos do roteiro"></nav>' +
@@ -95,6 +96,9 @@
         '<div class="upd-banner" id="upd-banner" role="status" hidden></div>' +
         '<div class="bridge" id="bridge" role="status" aria-live="polite" hidden></div>' +
         '<div id="pop"></div>' +
+        '<div class="lock-shield" id="lock-shield" hidden>' +
+          '<button type="button" class="lock-exit" id="lock-exit" aria-label="Segure para desbloquear">' +
+            '<span class="lock-fill" aria-hidden="true"></span>' + icon('lock', { size: 16 }) + '<span class="lock-txt">Segure para desbloquear</span></button></div>' +
       '</section>' +
       '<aside class="rail" id="rail" aria-label="Âncoras"></aside>' +
       '<aside class="live-edit" id="live-edit" aria-label="Editar roteiro durante a transmissão" hidden></aside>' +
@@ -1137,11 +1141,57 @@
       body: '<div class="shortcuts">' + [
         ['Espaço', 'Iniciar e pausar'], ['↑ ↓', 'Velocidade'], ['V', 'Velocidade automática'], ['+ −', 'Tamanho da fonte'], ['→ ←', 'Próximo e anterior tópico'], ['E', 'Editar roteiro sem parar'],
         ['Home', 'Voltar ao início'], ['D', 'Âncora mais próxima: dita'], ['S', 'Âncora mais próxima: pulada'],
-        ['A', 'Lista de âncoras'], ['M', 'Espelhar'], ['F', 'Tela cheia'], ['Esc', 'Fechar painéis']
+        ['A', 'Lista de âncoras'], ['M', 'Espelhar'], ['F', 'Tela cheia'], ['L', 'Modo bloqueio (segure Esc para sair)'], ['Esc', 'Fechar painéis']
       ].map(function (k) { return '<div><span>' + k[1] + '</span><span>' + k[0].split(' ').map(function (x) { return '<span class="kbd">' + x + '</span>'; }).join(' ') + '</span></div>'; }).join('') + '</div>',
       actions: [{ label: 'Fechar', tone: 'primary' }]
     });
   }
+  /* ---------------- modo bloqueio ----------------
+   * Só o texto na tela: some menu, barras, painéis e controles, e cliques ou
+   * teclas não mudam nada (o teleprompter continua como estava, rodando ou
+   * pausado). Sair: segurar o cadeado ou a tecla Esc por 1,5 s. */
+  var lock = { on: false, timer: null, fs: false };
+  var HOLD_MS = 1500;
+  function setLock(on) {
+    if (on === lock.on) return;
+    if (on) {
+      if (ed.open) closeEdit();
+      if (st.pop) closePop();
+      if (st.sheet) closeSheet();
+      st.drawer = false; layoutRail();
+    }
+    lock.on = on;
+    relayout(function () {
+      document.body.classList.toggle('is-locked', on);
+      ui.$('#lock-shield').hidden = !on;
+    });
+    if (on) {
+      // tenta a tela cheia junto; se o navegador não deixar, segue só com o bloqueio
+      try { if (!document.fullscreenElement && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().then(function () { lock.fs = true; }, function () {}); } catch (e) { /* opcional */ }
+    } else {
+      if (lock.fs && document.fullscreenElement) { try { document.exitFullscreen(); } catch (e) { /* noop */ } }
+      lock.fs = false;
+      ui.$('#btn-lock').focus();
+    }
+  }
+  function holdStart() {
+    if (!lock.on || lock.timer) return;
+    ui.$('#lock-exit').classList.add('is-holding');
+    lock.timer = setTimeout(function () { holdEnd(); setLock(false); }, HOLD_MS);
+  }
+  function holdEnd() {
+    clearTimeout(lock.timer); lock.timer = null;
+    ui.$('#lock-exit').classList.remove('is-holding');
+  }
+  ui.$('#btn-lock').addEventListener('click', function () { setLock(true); });
+  var exitBtn = ui.$('#lock-exit');
+  exitBtn.addEventListener('pointerdown', function (e) { e.preventDefault(); holdStart(); });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(function (ev) { exitBtn.addEventListener(ev, holdEnd); });
+  exitBtn.addEventListener('contextmenu', function (e) { e.preventDefault(); }); // toque longo no celular
+  // a "capa" sobre o texto engole cliques, toques e rolagem do mouse
+  ui.$('#lock-shield').addEventListener('wheel', function (e) { e.preventDefault(); }, { passive: false });
+  document.addEventListener('keyup', function (e) { if (lock.on && e.key === 'Escape') holdEnd(); });
+
   function fullscreen() {
     var d = document;
     try {
@@ -1177,6 +1227,7 @@
     if (st.pop && !e.target.closest('#pop, #btn-settings, #c-more')) closePop();
   });
   document.addEventListener('keydown', function (e) {
+    if (lock.on) { e.preventDefault(); if (e.key === 'Escape' && !e.repeat) holdStart(); return; }
     if (document.body.classList.contains('has-modal')) return;
     // Dentro do painel de edição, as teclas são do formulário (Esc fecha o painel).
     if (e.target.closest && e.target.closest('#live-edit')) { if (e.key === 'Escape') closeEdit(); return; }
@@ -1198,6 +1249,7 @@
     else if (k === 'a' || k === 'A') toggleRail();
     else if (k === 'm' || k === 'M') setPref('mirror', !prefs.mirror);
     else if (k === 'f' || k === 'F') fullscreen();
+    else if (k === 'l' || k === 'L') setLock(true);
     else if (k === 'v' || k === 'V') setAuto(!auto.on);
     else if (k === '?') showKeys();
   });
