@@ -728,3 +728,13 @@ ins.d { background: rgba(47, 191, 113, .2); color: #A6F0C6; text-decoration: non
 .key-row .kbd.is-wait { color: var(--accent-ink); border-color: var(--accent); background: var(--accent-soft); font-family: var(--font); font-weight: 500; }
 .key-fixed summary { cursor: pointer; font-size: 13px; color: var(--mute); padding: 4px 0 10px; }
 .key-fixed summary:hover { color: var(--fg); }
+
+/* ---------- espelho (Disaster Recovery) ---------- */
+.field-label { font-size: 13px; color: var(--fg-2); font-weight: 500; }
+/* tela espelho: só o botão "Assumir controle" fica ativo; o resto segue a principal */
+.is-following #c-prev, .is-following #c-next, .is-following .speed, .is-following #c-stop, .is-following #c-more { opacity: .35; pointer-events: none; }
+.is-following .tally { background: var(--accent-soft); color: var(--accent-ink); }
+.mirror-banner { position: absolute; z-index: 8; top: 14px; left: 0; right: 0; margin: 0 auto; width: fit-content; max-width: calc(100% - 24px); display: flex; gap: 10px; align-items: center; padding: 6px 6px 6px 14px; border-radius: 99px; background: var(--surface-2); box-shadow: var(--shadow); border: 1px solid rgba(242, 178, 49, .5); font-size: 13px; font-weight: 600; animation: fade .2s both; }
+.mirror-banner .ico { color: var(--warn); flex: none; }
+.mirror-banner span { min-width: 0; }
+.is-locked .mirror-banner { display: none !important; }
