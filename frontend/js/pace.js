@@ -43,19 +43,70 @@
     return clamp(remainingWords / remainingSec * 60);
   }
 
+  /* Palavras que não ajudam a achar o trecho (artigos, preposições...). */
+  var STOP = {};
+  ('a o e as os um uma uns umas de do da dos das no na nos nas em ao aos por para com sem que se ' +
+   'mais mas como foi ser sao esta isso esse essa este ja nao sim seu sua ele ela eles elas pelo pela').split(' ')
+    .forEach(function (w) { STOP[w] = true; });
+
+  /* Mesma palavra com tolerância: uma letra trocada (erro de reconhecimento) ou
+   * singular/plural. Números precisam ser iguais. */
+  function lev1(a, b) {
+    if (Math.abs(a.length - b.length) > 1) return false;
+    var i = 0, j = 0, edits = 0;
+    while (i < a.length && j < b.length) {
+      if (a[i] === b[j]) { i++; j++; continue; }
+      if (++edits > 1) return false;
+      if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
+    }
+    return edits + (a.length - i) + (b.length - j) <= 1;
+  }
+  function stem(w) { return w.length >= 5 ? w.replace(/(oes|aes|ais|eis|res|es|s)$/, '').slice(0, 6) : w; }
+  function near(a, b) {
+    if (a === b) return true;
+    if (!a || !b || /\d/.test(a) || /\d/.test(b)) return false;
+    return a.length >= 5 && b.length >= 5 && (lev1(a, b) || stem(a) === stem(b));
+  }
+
   /* Procura as últimas palavras faladas no roteiro, perto da posição atual.
-   * Retorna o índice da palavra seguinte ao trecho encontrado, ou -1. */
+   * Retorna o índice da palavra seguinte ao trecho encontrado, ou -1.
+   * 1º tenta o trecho exato; depois com tolerância por palavra; por fim aceita
+   * que o apresentador trocou ou pulou algumas palavras (a maioria das palavras
+   * com conteúdo precisa aparecer na mesma ordem). */
   function locate(scriptWords, spoken, fromIdx, ahead) {
     var tail = spoken.slice(-3);
     if (tail.length < 2) return -1;
     var start = Math.max(0, fromIdx - 15), end = Math.min(scriptWords.length, fromIdx + (ahead || 80));
-    for (var i = start; i <= end - tail.length; i++) {
-      var ok = true;
-      for (var j = 0; j < tail.length; j++) if (scriptWords[i + j] !== tail[j]) { ok = false; break; }
-      if (ok) return i + tail.length;
+    function pass(eq) {
+      for (var i = start; i <= end - tail.length; i++) {
+        var ok = true;
+        for (var j = 0; j < tail.length; j++) if (!eq(scriptWords[i + j], tail[j])) { ok = false; break; }
+        if (ok) return i + tail.length;
+      }
+      return -1;
     }
-    return -1;
+    var k = pass(function (a, b) { return a === b; });
+    if (k < 0) k = pass(near);
+    if (k < 0) k = locateLoose(scriptWords, spoken, start, end);
+    return k;
+  }
+  function locateLoose(scriptWords, spoken, start, end) {
+    var tail = spoken.filter(function (w) { return !STOP[w]; }).slice(-6);
+    if (tail.length < 3) return -1;
+    var need = Math.max(3, Math.ceil(tail.length * 0.6)), best = -1, bestHits = 0;
+    for (var i = start; i < end; i++) {
+      var j = 0, k = i, hits = 0, last = -1, lim = Math.min(scriptWords.length, i + tail.length * 2 + 4);
+      while (j < tail.length && k < lim) {
+        if (STOP[scriptWords[k]]) { k++; continue; }
+        var found = -1;
+        for (var m = k; m < Math.min(lim, k + 4); m++) if (near(scriptWords[m], tail[j])) { found = m; break; }
+        if (found >= 0) { hits++; last = found; k = found + 1; }
+        j++;
+      }
+      if (hits >= need && hits > bestHits) { bestHits = hits; best = last + 1; }
+    }
+    return best;
   }
 
-  return { MIN_WPM: MIN_WPM, MAX_WPM: MAX_WPM, clamp: clamp, words: words, spokenWpm: spokenWpm, wpmForTime: wpmForTime, locate: locate };
+  return { MIN_WPM: MIN_WPM, MAX_WPM: MAX_WPM, clamp: clamp, words: words, spokenWpm: spokenWpm, wpmForTime: wpmForTime, locate: locate, near: near };
 });

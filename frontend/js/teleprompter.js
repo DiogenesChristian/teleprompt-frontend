@@ -55,7 +55,8 @@
     anchors: {}, auto: {}, filter: 'todas',
     updated: {}, unseen: [],
     pxPerWord: 30, sheet: null, pop: null, drawer: false, wake: null,
-    behind: [], off: false, bridge: null, cut: null, serverPos: null
+    behind: [], off: false, bridge: null, cut: null, serverPos: null,
+    arming: false, voiceLost: false
   };
   script.anchors.forEach(function (a) { st.anchors[a.id] = 'pendente'; });
   var restored = S.getActive();
@@ -178,7 +179,7 @@
   }
   function setPref(k, v) { prefs[k] = v; S.setPrefs(prefs); applyPrefs(); }
   function setSpeed(v) {
-    if (auto.on) setAuto(false);
+    if (auto.on && st.running) manualTakeover(); else if (auto.on) setAuto(false);
     setPref('speed', Math.max(GF.SPEED.min, Math.min(GF.SPEED.max, v)));
   }
   function lineHeightPx(node) {
@@ -202,10 +203,14 @@
     el.scroller.scrollTop = st.pos;
     if (isJump && live) live.send({ type: 'position', wordIndex: wordAtLine() });
   }
+  // Rolagem feita pela pessoa (roda do mouse, toque): o manual passa a mandar.
+  var userScrollAt = 0;
+  ['wheel', 'touchmove'].forEach(function (ev) { el.scroller.addEventListener(ev, function () { userScrollAt = Date.now(); }, { passive: true }); });
   el.scroller.addEventListener('scroll', function () {
     var delta = Math.abs(el.scroller.scrollTop - st.pos);
     if (delta < 2) return; // rolagem do próprio motor
     st.pos = el.scroller.scrollTop;
+    if (Date.now() - userScrollAt < 400) manualTakeover();
     if (delta > el.scroller.clientHeight * 0.6) st.jump = true;
     updateCurrent();
   }, { passive: true });
@@ -434,6 +439,11 @@
     } else auto.interim = ws.slice(-6);
     auto.times = auto.times.slice(-60);
     if (ws.length) auto.lastWord = now;
+    // esperando a leitura começar: a fala bateu com o roteiro perto do ponto atual?
+    if (st.arming && isFinal) {
+      var k = P.locate(scriptWords, auto.spoken, wordAtLine(), 40);
+      if (k >= 0) readingStarted(k);
+    }
   }
   /* Voz pelo reconhecimento do próprio navegador (sem chave da Deepgram ou como reserva). */
   function startBrowserVoice() {
@@ -457,7 +467,7 @@
       useTime(e.error === 'network' ? 'Sem conexão para reconhecer a fala. A velocidade segue o tempo previsto.'
         : 'Microfone indisponível. A velocidade segue o tempo previsto.');
     };
-    r.onend = function () { if (auto.rec === r && auto.on && st.running) { try { r.start(); } catch (err) { /* reinício já em curso */ } } };
+    r.onend = function () { if (auto.rec === r && ((auto.on && st.running) || st.arming)) { try { r.start(); } catch (err) { /* reinício já em curso */ } } };
     auto.rec = r; auto.source = 'voz'; auto.engine = 'navegador'; resetHeard();
     if (live) live.send({ type: 'speech:start', engine: 'browser' });
     try { r.start(); } catch (e) { auto.rec = null; useTime(); }
@@ -471,6 +481,12 @@
     auto.engine = null;
   }
   function useTime(msg) {
+    if (st.arming) { // não dá para ouvir: volta ao início manual
+      disarm();
+      ui.toast('Não foi possível ouvir o microfone. Aperte Iniciar para começar.', 'warn', 4500);
+      return;
+    }
+    if (msg) st.voiceLost = true; // a voz caiu: avisar quando voltar
     var r = auto.rec; auto.rec = null;
     if (r) { try { r.abort(); } catch (e) { /* noop */ } }
     stopCloud();
@@ -512,7 +528,42 @@
     stopVoice(); auto.waiting = false; renderSpeed();
     try { if (st.wake) { st.wake.release(); st.wake = null; } } catch (e) { /* noop */ }
   }
-  function toggle() { if (st.running) pause(); else play(); }
+  function toggle() {
+    if (st.running) return pause();
+    if (st.arming) { disarm(); return play(); }        // apertou de novo: começa já, sem esperar
+    if (prefs.voiceStart && !st.started) return arm(); // espera o apresentador começar a ler
+    play();
+  }
+
+  /* ---------------- começar quando o apresentador começa a ler ----------------
+   * Com "Começar pela voz" ligado, o botão Iniciar deixa o microfone ouvindo.
+   * Quando a fala bate com o começo do roteiro (no navegador ou, com backend,
+   * pelo rastreador do servidor: tracker.reading), o teleprompter começa a rolar
+   * sozinho a partir do ponto que está sendo lido. */
+  function arm() {
+    if (!GF.net.online() || !(canCloud() || (SR && !auto.voiceFailed))) {
+      ui.toast('Sem reconhecimento de voz agora (internet ou microfone). Começando no manual.', 'info', 4000);
+      return play();
+    }
+    st.arming = true;
+    renderPlay();
+    startVoice();
+  }
+  function disarm() {
+    if (!st.arming) return;
+    st.arming = false;
+    if (!auto.on || !st.running) stopVoice();
+    renderPlay();
+  }
+  function readingStarted(k) {
+    if (!st.arming) return;
+    st.arming = false;
+    if (k > 0) goWord(Math.max(0, k - 1));
+    var keepVoice = auto.on;
+    play();
+    if (!keepVoice) stopVoice(); // sem velocidade automática, a voz só serviu para dar a largada
+    ui.toast('Leitura reconhecida: o teleprompter começou.', 'ok', 2200);
+  }
   function counts() {
     var c = { total: 0, dita: 0, pulada: 0, pendente: 0, risco: 0 };
     script.anchors.forEach(function (a) { c.total++; c[st.anchors[a.id]]++; if (isBehind(a)) c.risco++; });
@@ -725,6 +776,7 @@
       });
     }
     st.serverPos = { k: m.pos, at: Date.now() };
+    if (st.arming && m.reading) readingStarted(m.pos);
     var behind = m.behind || [], cut = m.cutPlan && m.cutPlan.tight ? m.cutPlan : null;
     var railChanged = marked || JSON.stringify(behind) !== JSON.stringify(st.behind) || JSON.stringify(cut) !== JSON.stringify(st.cut);
     st.behind = behind; st.cut = cut;
@@ -732,10 +784,31 @@
     if (marked) { refreshAnchorMarks(); persist(); }
     if (railChanged) renderRail();
   }
+  /* O operador assumiu (rolou com a mão ou mexeu na velocidade): o automático
+   * desliga e só volta quando alguém apertar Auto de novo. */
+  function manualTakeover() {
+    if (!auto.on || !st.running) return;
+    setAuto(false);
+    ui.toast('Modo manual: você assumiu a rolagem. Aperte Auto para a voz voltar a guiar.', 'info', 4000);
+  }
+  /* A voz ou a conexão voltou depois de cair. Quem está no manual continua no
+   * manual (só recebe um aviso); quem estava no automático por tempo volta a seguir a fala. */
+  function voiceBack() {
+    if (!st.voiceLost) return;
+    st.voiceLost = false;
+    auto.voiceFailed = false; auto.cloudFailed = false;
+    if (!st.running) return;
+    if (!auto.on) { ui.toast('A voz voltou. Você continua no manual; aperte Auto para ela guiar de novo.', 'info', 4500); return; }
+    if (auto.source === 'tempo') { auto.source = null; startAuto(); ui.toast('A voz voltou: a rolagem segue a fala de novo.', 'ok', 3000); }
+  }
+  window.addEventListener('offline', function () { if (auto.on && auto.source === 'voz') st.voiceLost = true; });
+  window.addEventListener('online', voiceBack);
+
   function connectLive() {
     if (!GF.api.sync.enabled()) return;
     live = GF.api.live(script.id, script);
     live.on('tracker', onTracker);
+    live.on('hello', function () { live.wasReady = true; });
     live.on('speech:transcript', function (m) { if (auto.engine === 'deepgram') feedWords(m.text, m.final); });
     live.on('speech:error', function (m) {
       if (auto.engine !== 'deepgram') return;
@@ -744,12 +817,14 @@
       startAuto();
     });
     live.on('open', function () {
+      voiceBack();
       // reenvia o estado das âncoras marcadas antes da conexão
       Object.keys(st.anchors).forEach(function (id) { if (st.anchors[id] !== 'pendente') live.send({ type: 'anchor', id: id, state: st.anchors[id] }); });
       live.send({ type: 'position', wordIndex: wordAtLine() });
       if (auto.on && st.running && auto.engine === 'navegador' && canCloud()) { stopVoice(); startAuto(); }
     });
     live.on('close', function () {
+      if (live.wasReady) st.voiceLost = true;
       if (auto.engine === 'deepgram') { stopCloud(); auto.source = null; startAuto(); }
       setOffScript(false, null);
     });
@@ -1037,12 +1112,20 @@
   }
   function renderPlay() {
     var b = ui.$('#c-play');
-    var label = st.running ? 'Pausar' : st.started ? 'Retomar' : 'Iniciar';
-    b.innerHTML = icon(st.running ? 'pause' : 'play', { size: 22 }) + '<span>' + label + '</span>';
-    b.setAttribute('aria-label', label + ' (espaço)');
+    if (st.arming) {
+      b.innerHTML = icon('mic', { size: 22 }) + '<span>Ouvindo…</span>';
+      b.setAttribute('aria-label', 'Esperando o apresentador começar a ler. Aperte para começar já (espaço)');
+      b.title = 'Esperando a leitura. Aperte para começar já.';
+    } else {
+      var label = st.running ? 'Pausar' : st.started ? 'Retomar' : prefs.voiceStart ? 'Iniciar pela voz' : 'Iniciar';
+      b.innerHTML = icon(st.running ? 'pause' : prefs.voiceStart && !st.started ? 'mic' : 'play', { size: 22 }) + '<span>' + label + '</span>';
+      b.setAttribute('aria-label', label + ' (espaço)');
+      b.title = '';
+    }
+    b.classList.toggle('is-arming', !!st.arming);
     var t = ui.$('#tally');
     t.className = 'tally' + (st.running ? ' is-live' : '');
-    t.innerHTML = '<i></i>' + (st.running ? 'No ar' : st.started ? 'Pausado' : 'Pronto');
+    t.innerHTML = '<i></i>' + (st.running ? 'No ar' : st.arming ? 'Aguardando leitura' : st.started ? 'Pausado' : 'Pronto');
     renderEditState();
   }
   var ticks = false;
@@ -1096,6 +1179,7 @@
       '<div class="field"><label for="p-mic">Microfone</label><select class="select" id="p-mic"><option value="">Padrão do sistema</option></select>' +
         '<p class="field-hint">Usado na voz pelo servidor. Sem backend, vale o padrão do sistema.</p></div>' +
       '<div class="pop-switches">' +
+        sw('p-voicestart', 'Começar pela voz', !!prefs.voiceStart) +
         sw('p-autospeed', 'Velocidade automática', auto.on) +
         sw('p-upper', 'Texto em maiúsculas', prefs.upper !== false) +
         sw('p-mirror', 'Espelhar texto', prefs.mirror) +
@@ -1117,6 +1201,7 @@
     });
     p.addEventListener('change', function (e) {
       if (e.target.id === 'p-autospeed') setAuto(e.target.checked);
+      if (e.target.id === 'p-voicestart') { prefs.voiceStart = e.target.checked; S.setPrefs(prefs); if (!prefs.voiceStart) disarm(); renderPlay(); }
       if (e.target.id === 'p-mic') {
         prefs.micId = e.target.value || null; S.setPrefs(prefs);
         if (auto.cloud) { stopCloud(); auto.source = null; startAuto(); } // troca a entrada sem parar o teleprompter

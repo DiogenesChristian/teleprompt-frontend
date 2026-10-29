@@ -45,3 +45,23 @@ test('busca só perto da posição atual', () => {
   const script = P.words('a b c d e f ' + 'x '.repeat(200) + 'a b c');
   assert.equal(P.locate(script, ['b', 'c'], 0), 3);
 });
+
+/* ---------- ajustes da voz (Louise) ---------- */
+
+test('localiza com uma letra errada no reconhecimento', () => {
+  const script = P.words('Boa noite. O governo anunciou hoje um novo pacote de investimentos.');
+  const k = P.locate(script, P.words('governu anunciou hoje'), 0);
+  assert.equal(script[k], 'um');
+});
+
+test('localiza quando o apresentador troca algumas palavras', () => {
+  const script = P.words('O Governo Federal anunciou hoje um pacote de R$ 12 bilhões para 15 estados brasileiros a partir de janeiro.');
+  const spoken = P.words('o governo federal divulgou nesta segunda um pacote de doze bilhões para 15 estados');
+  const k = P.locate(script, spoken, 0);
+  assert.equal(script[k - 1], 'estados');
+});
+
+test('palavra no singular ou plural conta como a mesma', () => {
+  assert.ok(P.near('estados', 'estado'));
+  assert.ok(!P.near('12', '13'));
+});

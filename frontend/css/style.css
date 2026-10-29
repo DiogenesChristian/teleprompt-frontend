@@ -714,3 +714,8 @@ ins.d { background: rgba(47, 191, 113, .2); color: #A6F0C6; text-decoration: non
 @media (max-width: 599px) { .lock-txt { display: none; } .lock-exit { padding: 0 11px; } }
 /* celular: âncora longa pode quebrar linha (em maiúsculas ela não cabe inteira) */
 @media (max-width: 599px) { .tp-text .anc { white-space: normal !important; } }
+
+/* começar pela voz: botão "Ouvindo…" enquanto espera a leitura */
+.ctl-play.is-arming { background: var(--surface-2); border-color: rgba(39, 136, 255, .6); color: var(--accent-ink); }
+.ctl-play.is-arming .ico { animation: pulse 1.2s infinite; }
+@media (prefers-reduced-motion: reduce) { .ctl-play.is-arming .ico { animation: none; } }
