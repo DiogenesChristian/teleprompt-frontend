@@ -129,7 +129,15 @@ label { font-size: 13px; color: var(--fg-2); font-weight: 500; }
 .switch input:checked + .track { background: var(--accent); }
 .switch input:checked + .track::after { transform: translateX(16px); background: #fff; }
 .switch input:focus-visible + .track { box-shadow: var(--focus); }
-input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; }
+/* controle deslizante com o visual do Globo Flow (igual em qualquer navegador) */
+input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 28px; margin: 0; background: transparent; cursor: pointer; }
+input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 99px; background: var(--surface-3); }
+input[type=range]::-moz-range-track { height: 4px; border-radius: 99px; background: var(--surface-3); }
+input[type=range]::-moz-range-progress { height: 4px; border-radius: 99px; background: var(--accent); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; margin-top: -6px; border: 0; border-radius: 50%; background: var(--fg); box-shadow: 0 0 0 4px var(--accent-soft); }
+input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border: 0; border-radius: 50%; background: var(--fg); box-shadow: 0 0 0 4px var(--accent-soft); }
+input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--accent); }
+input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 4px var(--accent); }
 .range-row { display: grid; grid-template-columns: minmax(0, 1fr) 52px; gap: 12px; align-items: center; }
 .range-row output { font: 600 14px var(--mono); text-align: right; }
 
