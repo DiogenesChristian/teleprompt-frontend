@@ -65,6 +65,9 @@
   }
 
   function blockAnchors(b) { return script.anchors.filter(function (a) { return a.blockId === b.id; }); }
+  function coverTexts(b) { return (script.covers || []).filter(function (c) { return c.blockId === b.id; }).map(function (c) { return c.text; }); }
+  /* Retranca: assunto do tópico em destaque, no padrão da redação ("[09]PREVISÃO DO TEMPO"). */
+  function retranca(b, i) { return '[' + U.pad(i + 1) + ']' + (b.title.trim() ? U.esc(b.title) : 'SEM TÍTULO'); }
   function blockIndexOf(bid) { return script.blocks.findIndex(function (b) { return b.id === bid; }); }
   function anchorBlockIndex(a) { return blockIndexOf(a.blockId); }
 
@@ -133,9 +136,9 @@
   function blockHTML(b, i) {
     var upd = st.updated[b.id];
     return '<div class="tp-block' + (upd ? ' is-updated' : '') + '" data-block="' + b.id + '">' +
-      '<div class="tp-head"><span class="tc">' + U.pad(i + 1) + '</span><span>' + U.esc(b.title) + '</span>' +
+      '<div class="tp-head"><span class="retranca">' + retranca(b, i) + '</span>' +
         (upd ? '<span class="tp-upd">' + icon('refresh-cw', { size: 13 }) + 'Atualizado às ' + U.time(upd.at) + '</span>' : '') + '</div>' +
-      '<p class="tp-text">' + GF.renderText(b.text, blockAnchors(b), { updated: upd ? upd.parts : [], anchorState: anchorClass }) + '</p></div>';
+      '<p class="tp-text">' + GF.renderText(b.text, blockAnchors(b), { updated: upd ? upd.parts : [], covered: coverTexts(b), anchorState: anchorClass }) + '</p></div>';
   }
   function renderScript() {
     indexWords();
@@ -164,6 +167,7 @@
     el.stage.classList.toggle('is-mirror', !!prefs.mirror);
     document.body.classList.toggle('contrast-alto', prefs.contrast === 'alto');
     document.body.classList.toggle('hide-cues', !prefs.showCues);
+    document.body.classList.toggle('tp-upper', prefs.upper !== false); // padrão da redação: texto em maiúsculas
     ui.$('#rline').hidden = !prefs.readingLine;
     renderSpeed();
     setTimeout(measure, 280);
@@ -255,8 +259,7 @@
     var nx = script.blocks[i + 1];
     ui.$('#topic-bar').innerHTML =
       '<div class="tb-cur" aria-live="polite">' +
-        '<span class="tb-num tc">' + (i + 1) + '/' + n + '</span>' +
-        '<b class="tb-title' + (animate ? ' is-new' : '') + '">' + (b.title.trim() ? U.esc(b.title) : 'Sem título') + '</b></div>' +
+        '<b class="tb-title retranca' + (animate ? ' is-new' : '') + '" title="Tópico ' + (i + 1) + ' de ' + n + '">' + retranca(b, i) + '</b></div>' +
       (nx ? '<button type="button" class="tb-next" data-goblock="' + (i + 1) + '" title="Ir para o próximo tópico">' +
           '<span class="tb-label">A seguir</span><span class="tb-next-t">' + (nx.title.trim() ? U.esc(nx.title) : 'Sem título') + '</span></button>'
         : '<span class="tb-label">Último tópico</span>');
@@ -377,7 +380,10 @@
   }
   function startCloud() {
     var c = {}; auto.cloud = c; auto.source = 'voz'; auto.engine = 'deepgram'; resetHeard();
-    navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }).then(function (stream) {
+    navigator.mediaDevices.getUserMedia({ audio: micConstraints() }).catch(function (err) {
+      if (!prefs.micId) throw err;
+      return navigator.mediaDevices.getUserMedia({ audio: micConstraints(true) }); // microfone escolhido sumiu: usa o padrão
+    }).then(function (stream) {
       if (auto.cloud !== c) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
       var mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'].filter(function (m) { return MediaRecorder.isTypeSupported(m); })[0];
       var rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
@@ -391,6 +397,21 @@
       useTime('Microfone indisponível. A velocidade segue o tempo previsto.');
     });
     renderSpeed();
+  }
+  /* Entrada de áudio escolhida nos ajustes (ex.: microfone externo do estúdio). */
+  function micConstraints(ignoreChoice) {
+    var c = { echoCancellation: true, noiseSuppression: true };
+    if (prefs.micId && !ignoreChoice) c.deviceId = { exact: prefs.micId };
+    return c;
+  }
+  function fillMics(sel) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) { sel.disabled = true; return; }
+    navigator.mediaDevices.enumerateDevices().then(function (list) {
+      var mics = list.filter(function (d) { return d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications'; });
+      sel.innerHTML = '<option value="">Padrão do sistema</option>' + mics.map(function (d, i) {
+        return '<option value="' + U.esc(d.deviceId) + '"' + (d.deviceId === prefs.micId ? ' selected' : '') + '>' + U.esc(d.label || 'Microfone ' + (i + 1)) + '</option>';
+      }).join('');
+    }, function () { sel.disabled = true; });
   }
   function stopCloud() {
     var c = auto.cloud; auto.cloud = null;
@@ -746,7 +767,8 @@
   // Assinatura da estrutura: título principal, ordem, títulos e duração dos tópicos, âncoras.
   function structSig(s) {
     return s.title + '§' + s.blocks.map(function (b) { return b.id + '|' + b.title + '|' + b.durationSec; }).join('§') +
-      '§' + s.anchors.map(function (a) { return a.id + '|' + a.text; }).join(',');
+      '§' + s.anchors.map(function (a) { return a.id + '|' + a.text; }).join(',') +
+      '§' + (s.covers || []).map(function (c) { return c.blockId + '|' + c.text; }).join(',');
   }
   /* Aplica uma versão nova do roteiro sem reiniciar o teleprompter: tempo,
    * âncoras e posição de leitura continuam. own = salva pelo painel desta tela. */
@@ -807,7 +829,7 @@
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
 
   function syncNote() {
-    return GF.api.sync.enabled() ? 'também enviado aos outros aparelhos' : 'só neste navegador (backend desligado)';
+    return GF.api.sync.enabled() ? 'enviado aos outros aparelhos' : 'só neste navegador';
   }
   function edTopicHTML(b, i) {
     var n = ed.draft.blocks.length, isCur = script.blocks[st.cur] && script.blocks[st.cur].id === b.id;
@@ -841,12 +863,7 @@
         '<div class="le-topics" id="le-topics">' + d.blocks.map(edTopicHTML).join('') + '</div>' +
         '<button type="button" class="btn add-block btn-block" data-le="add">' + icon('plus', { size: 16 }) + 'Adicionar tópico</button>' +
       '</div>' +
-      '<div class="le-foot">' +
-        '<p class="le-state" id="le-state" role="status"></p>' +
-        '<div class="le-actions">' +
-          '<button type="button" class="btn btn-ghost" data-le="discard">Descartar</button>' +
-          '<button type="button" class="btn btn-primary" data-le="save">Salvar e aplicar</button></div>' +
-      '</div>';
+      '<div class="le-foot"><p class="le-state" id="le-state" role="status"></p></div>';
     ui.$$('.le-text', edEl).forEach(grow);
     renderEditState();
   }
@@ -856,17 +873,21 @@
     var sub = ui.$('#le-sub', edEl), state = ui.$('#le-state', edEl);
     sub.textContent = st.running ? 'A leitura continua enquanto você edita' : st.started ? 'Teleprompter pausado' : 'Teleprompter não iniciado';
     state.className = 'le-state' + (ed.dirty ? ' is-dirty' : '');
-    state.textContent = ed.dirty ? 'Não salvo' : ed.savedAt ? 'Aplicado às ' + U.time(ed.savedAt) : '';
-    state.title = ed.savedAt && !ed.dirty ? 'Salvo ' + syncNote() : '';
-    ui.$('[data-le=save]', edEl).disabled = !ed.dirty;
-    ui.$('[data-le=discard]', edEl).hidden = !ed.dirty;
+    state.textContent = ed.dirty ? 'Atualizando…' : ed.savedAt ? 'Na tela desde ' + U.time(ed.savedAt) + ' · ' + syncNote()
+      : 'As alterações aparecem na tela enquanto você digita.';
   }
   function markEditCurrent() {
     if (!ed.open) return;
     var cur = script.blocks[st.cur];
     ui.$$('.le-topic', edEl).forEach(function (t) { t.classList.toggle('is-current', !!cur && t.dataset.leBlock === cur.id); });
   }
-  function setDirty() { ed.dirty = true; renderEditState(); }
+  /* Toda alteração vai para a tela logo depois que a pessoa para de digitar. */
+  var LIVE_MS = 600, liveTimer = null;
+  function setDirty() {
+    ed.dirty = true; renderEditState();
+    clearTimeout(liveTimer);
+    liveTimer = setTimeout(saveEdit, LIVE_MS);
+  }
   /* Rola só a lista do painel (scrollIntoView rolaria a página inteira do estúdio). */
   function panelScroll(node, where) {
     var body = ui.$('#le-body', edEl); if (!body || !node) return;
@@ -888,7 +909,7 @@
     if (st.sheet) closeSheet();
     if (st.pop) closePop();
     st.drawer = false; layoutRail();
-    ed.open = true; ed.draft = clone(script); ed.dirty = false; ed.conflict = false; ed.fresh = {};
+    ed.open = true; ed.draft = clone(script); ed.dirty = false; ed.conflict = false; ed.fresh = {}; ed.logged = false; ed.savedAt = null;
     renderEdit();
     relayout(function () { edEl.hidden = false; el.body.classList.add('is-editing'); });
     ui.$('#btn-edit').setAttribute('aria-expanded', 'true');
@@ -899,11 +920,7 @@
   }
   function closeEdit(force) {
     if (!ed.open) return;
-    if (ed.dirty && !force) {
-      ui.confirm({ title: 'Descartar alterações?', message: 'As mudanças ainda não salvas não vão para a tela.', confirmLabel: 'Descartar', tone: 'danger' })
-        .then(function (ok) { if (ok) closeEdit(true); });
-      return;
-    }
+    if (ed.dirty) saveEdit(); // aplica o que ainda estava esperando
     ed.open = false; ed.draft = null; ed.dirty = false;
     relayout(function () { edEl.hidden = true; el.body.classList.remove('is-editing'); });
     edEl.innerHTML = '';
@@ -913,34 +930,48 @@
   }
   function onEditExternal() {
     // Outra aba, o editor completo ou outro computador salvou enquanto o painel estava aberto.
-    if (!ed.dirty) { ed.draft = clone(script); renderEdit(); return; }
+    if (!ed.dirty) {
+      var a = document.activeElement, aid = a && edEl.contains(a) && a.id, s0 = a && a.selectionStart, s1 = a && a.selectionEnd;
+      var keep = ui.$('#le-body', edEl).scrollTop;
+      ed.draft = clone(script); renderEdit();
+      ui.$('#le-body', edEl).scrollTop = keep;
+      var back = aid && document.getElementById(aid);
+      if (back) { back.focus({ preventScroll: true }); try { back.setSelectionRange(s0, s1); } catch (err) { /* sem seleção */ } }
+      return;
+    }
     ed.conflict = true;
     var c = ui.$('#le-conflict', edEl); if (c) c.hidden = false;
   }
   function saveEdit() {
+    clearTimeout(liveTimer);
+    if (!ed.open || !ed.dirty) return;
     var d = ed.draft;
-    if (!d.title.trim()) { ui.toast('Dê um título principal ao roteiro.', 'warn'); ui.$('#le-title', edEl).focus({ preventScroll: true }); return; }
-    d.blocks.forEach(function (b, i) { if (!b.title.trim()) b.title = 'Tópico ' + (i + 1); });
+    if (!d.title.trim()) { ed.dirty = false; renderEditState(); return; } // espera ter um título principal
     var contentSig = function (s) { return s.blocks.map(function (b) { return b.id + '|' + b.text; }).join('§'); };
     var latest = S.getScript(script.id) || script;
-    // Só título, tópicos e âncoras vêm do painel; o resto (programa, aprovação, histórico) vem da versão salva.
-    var out = Object.assign(clone(latest), { title: d.title, blocks: d.blocks, anchors: d.anchors });
+    // Do painel vêm título, tópicos, âncoras e notas cobertas; o resto (programa, aprovação, histórico) vem da versão salva.
+    var out = Object.assign(clone(latest), {
+      title: d.title,
+      blocks: d.blocks.map(function (b, i) { return Object.assign({}, b, { title: b.title.trim() ? b.title : 'Tópico ' + (i + 1) }); }),
+      anchors: clone(d.anchors), covers: clone(d.covers || [])
+    });
+    var backToReview = false;
     if (contentSig(out) !== contentSig(latest)) {
       if (out.status === 'aprovado') {
         S.addRevision(out, { kind: 'edicao', blockId: null, before: '', after: '', note: 'Roteiro alterado durante a transmissão; voltou para revisão.' });
         out.status = 'em-revisao'; out.approvedBy = null; out.approvedAt = null;
-        var backToReview = true;
-      } else {
+        backToReview = true; ed.logged = true;
+      } else if (!ed.logged) { // um registro por sessão de edição, não um por tecla
         S.addRevision(out, { kind: 'edicao', blockId: null, before: '', after: '', note: 'Roteiro alterado durante a transmissão.' });
+        ed.logged = true;
       }
     }
     S.saveScript(out);
     applyFresh(S.getScript(script.id) || out, null, true);
-    ed.draft = clone(script); ed.dirty = false; ed.conflict = false; ed.fresh = {}; ed.savedAt = Date.now();
-    var keep = ui.$('#le-body', edEl).scrollTop;
-    renderEdit();
-    ui.$('#le-body', edEl).scrollTop = keep;
-    if (backToReview) ui.toast('Roteiro aplicado. Como foi alterado, voltou para revisão.', 'info', 3500);
+    ed.dirty = false; ed.conflict = false; ed.savedAt = Date.now();
+    var c = ui.$('#le-conflict', edEl); if (c) c.hidden = true;
+    renderEditState(); // o rascunho continua o mesmo: quem está digitando não perde o foco
+    if (backToReview) ui.toast('Como o texto mudou, o roteiro voltou para revisão.', 'info', 3500);
   }
 
   edEl.addEventListener('input', function (e) {
@@ -956,8 +987,7 @@
     var btn = e.target.closest('[data-le]'); if (!btn || btn.disabled) return;
     var act = btn.dataset.le, d = ed.draft;
     if (act === 'close') return closeEdit();
-    if (act === 'save') return saveEdit();
-    if (act === 'discard' || act === 'reload') {
+    if (act === 'reload') {
       ed.draft = clone(script); ed.dirty = false; ed.conflict = false; ed.fresh = {};
       renderEdit(); return;
     }
@@ -983,11 +1013,12 @@
       rerender('[data-le-block="' + b.id + '"] [data-le=' + act + ']:not(:disabled)');
     } else if (act === 'del') {
       var del = d.blocks[i];
-      ui.confirm({ title: 'Excluir tópico?', message: '“' + U.esc(del.title || 'Sem título') + '” sai do roteiro quando você salvar.', confirmLabel: 'Excluir', tone: 'danger' })
+      ui.confirm({ title: 'Excluir tópico?', message: '“' + U.esc(del.title || 'Sem título') + '” sai do roteiro e da tela.', confirmLabel: 'Excluir', tone: 'danger' })
         .then(function (ok) {
           if (!ok) return;
           d.blocks.splice(i, 1);
           d.anchors = d.anchors.filter(function (a) { return a.blockId !== del.id; });
+          d.covers = (d.covers || []).filter(function (c) { return c.blockId !== del.id; });
           rerender();
         });
     }
@@ -1058,8 +1089,11 @@
       '<div class="seg seg-full" role="radiogroup" aria-label="Contraste" id="p-ct">' +
         '<button type="button" data-v="padrao" aria-pressed="' + (prefs.contrast !== 'alto') + '">Contraste padrão</button>' +
         '<button type="button" data-v="alto" aria-pressed="' + (prefs.contrast === 'alto') + '">Alto contraste</button></div>' +
+      '<div class="field"><label for="p-mic">Microfone</label><select class="select" id="p-mic"><option value="">Padrão do sistema</option></select>' +
+        '<p class="field-hint">Usado na voz pelo servidor. Sem backend, vale o padrão do sistema.</p></div>' +
       '<div class="pop-switches">' +
         sw('p-autospeed', 'Velocidade automática', auto.on) +
+        sw('p-upper', 'Texto em maiúsculas', prefs.upper !== false) +
         sw('p-mirror', 'Espelhar texto', prefs.mirror) +
         sw('p-line', 'Linha de leitura', prefs.readingLine) +
         sw('p-cues', 'Marcações técnicas', prefs.showCues) +
@@ -1079,7 +1113,11 @@
     });
     p.addEventListener('change', function (e) {
       if (e.target.id === 'p-autospeed') setAuto(e.target.checked);
-      var map = { 'p-mirror': 'mirror', 'p-line': 'readingLine', 'p-cues': 'showCues', 'p-auto': 'autoMark' };
+      if (e.target.id === 'p-mic') {
+        prefs.micId = e.target.value || null; S.setPrefs(prefs);
+        if (auto.cloud) { stopCloud(); auto.source = null; startAuto(); } // troca a entrada sem parar o teleprompter
+      }
+      var map = { 'p-upper': 'upper', 'p-mirror': 'mirror', 'p-line': 'readingLine', 'p-cues': 'showCues', 'p-auto': 'autoMark' };
       if (map[e.target.id]) setPref(map[e.target.id], e.target.checked);
     });
     p.addEventListener('click', function (e) {
@@ -1090,6 +1128,7 @@
       if (e.target.closest('[data-keys]')) { closePop(); showKeys(); }
       if (e.target.closest('[data-stop]')) { closePop(); stop(); }
     });
+    fillMics(ui.$('#p-mic', p));
     ui.$('input', p).focus();
   }
   function showKeys() {
