@@ -95,6 +95,7 @@
         '<div class="scroller" id="scroller"><div class="script" id="script"></div></div>' +
         '<div class="reading-line" id="rline" aria-hidden="true"></div>' +
         '<div class="upd-banner" id="upd-banner" role="status" hidden></div>' +
+        '<div class="mirror-banner" id="mirror-banner" role="alert" hidden></div>' +
         '<div class="bridge" id="bridge" role="status" aria-live="polite" hidden></div>' +
         '<div id="pop"></div>' +
         '<div class="lock-shield" id="lock-shield" hidden>' +
@@ -163,7 +164,10 @@
   var LINE = 0.38;
   function lineY() { return el.scroller.clientHeight * LINE; }
   function manualWpm() { return 60 + prefs.speed * 20; } // 1 → 80 … 10 → 260 palavras por minuto
-  function wpm() { return auto.on && auto.source ? Math.round(auto.wpm) : manualWpm(); }
+  function wpm() {
+    if (following() && mir.wpm) return mir.wpm; // espelho: rola no ritmo da tela principal
+    return auto.on && auto.source ? Math.round(auto.wpm) : manualWpm();
+  }
   function applyPrefs() {
     var w = el.stage.clientWidth || window.innerWidth;
     var scale = Math.min(1, Math.max(0.6, w / 1000));
@@ -202,6 +206,7 @@
     if (isJump) { st.jump = true; st.lastPos = st.pos; }
     el.scroller.scrollTop = st.pos;
     if (isJump && live) live.send({ type: 'position', wordIndex: wordAtLine() });
+    if (isJump) mir.dirty = true;
   }
   // Rolagem feita pela pessoa (roda do mouse, toque): o manual passa a mandar.
   var userScrollAt = 0;
@@ -313,6 +318,7 @@
     st.lastTick = now;
     if (st.running && now - lastPersist > 1000) { lastPersist = now; persist(); }
     if (now - lastAuto > 500) { lastAuto = now; autoTick(); }
+    mirrorTick();
     if (live && st.started && now - lastClock > 2000) { lastClock = now; live.send({ type: 'clock', elapsedSec: Math.round(st.elapsedMs / 1000), wordIndex: voiceTracked() ? null : wordAtLine() }); }
     renderTiming();
   }, 250);
@@ -329,6 +335,15 @@
     script.blocks.forEach(function (b) { blockStart.push(scriptWords.length); scriptWords = scriptWords.concat(P.words(b.text)); });
   }
   function blockRange(i) { return [blockStart[i], i + 1 < blockStart.length ? blockStart[i + 1] : scriptWords.length]; }
+  /* posição na linha de leitura com fração de palavra (independe do tamanho da tela) */
+  function wordPos() {
+    var texts = ui.$$('.tp-text', el.script), y = el.scroller.scrollTop + lineY();
+    for (var i = 0; i < texts.length; i++) {
+      var t = texts[i], r = blockRange(i);
+      if (y < t.offsetTop + t.offsetHeight) return r[0] + Math.max(0, Math.min(1, (y - t.offsetTop) / t.offsetHeight)) * (r[1] - r[0]);
+    }
+    return scriptWords.length;
+  }
   /* índice aproximado da palavra que está na linha de leitura */
   function wordAtLine() {
     var texts = ui.$$('.tp-text', el.script), y = el.scroller.scrollTop + lineY();
@@ -513,7 +528,7 @@
   /* ---------------- sessão ---------------- */
   function persist() {
     // wordIndex: posição no texto, para voltar ao mesmo ponto depois de ir ao editor.
-    if (st.started) S.setActive({ scriptId: script.id, startedAt: st.startedAt, elapsedMs: Math.round(st.elapsedMs), anchors: st.anchors, wordIndex: wordAtLine() });
+    if (st.started && !following()) S.setActive({ scriptId: script.id, startedAt: st.startedAt, elapsedMs: Math.round(st.elapsedMs), anchors: st.anchors, wordIndex: wordAtLine() });
   }
   window.addEventListener('pagehide', persist);
   function play() {
@@ -529,6 +544,7 @@
     try { if (st.wake) { st.wake.release(); st.wake = null; } } catch (e) { /* noop */ }
   }
   function toggle() {
+    if (following()) return takeOver();
     if (st.running) return pause();
     if (st.arming) { disarm(); return play(); }        // apertou de novo: começa já, sem esperar
     if (prefs.voiceStart && !st.started) return arm(); // espera o apresentador começar a ler
@@ -766,6 +782,129 @@
     updateCurrent(true);
   }
 
+  /* ---------------- espelho (Disaster Recovery) ----------------
+   * Duas ou mais telas com o mesmo roteiro: uma controla (principal) e as outras
+   * seguem a posição dela (espelho). Com backend, entre computadores; sem
+   * backend, entre janelas do mesmo navegador (ex.: segundo monitor).
+   * - Se a principal cai (fechou, perdeu a conexão), o espelho continua rolando
+   *   e assume o controle sozinho em 1,5 s, no manual.
+   * - Se a principal travar sem cair (para de mandar a posição), o espelho
+   *   continua rolando e mostra "Assumir controle" (decisão do operador).
+   * - Quem volta depois de cair não toma o controle: vira espelho de quem está
+   *   no comando (o manual tem prioridade).
+   * - A tela abre como principal se ninguém estiver no controle; em Ajustes dá
+   *   para marcar "Esta tela: espelho (reserva)", que ao abrir só acompanha. */
+  var mir = { me: null, controller: null, last: 0, wpm: null, lost: false, dirty: false, lastSent: 0, awaitFirst: true, chan: null };
+  function following() { return !!(mir.controller && mir.controller.id && mir.controller.id !== mir.me); }
+  function controlling() { return !!(mir.controller && mir.controller.id === mir.me); }
+  function mirReady() { return !!((live && live.ready) || mir.chan); }
+  function mirSend(msg) {
+    if (live && live.ready) return live.send(msg);
+    if (mir.chan) { try { mir.chan.postMessage(Object.assign({ from: mir.me, by: me() }, msg)); } catch (e) { /* noop */ } }
+  }
+  function me() { var u = S.currentUser(); return u ? u.name : 'Outra tela'; }
+  function claim() {
+    if (mir.chan && !(live && live.ready)) { var m = { type: 'control', id: mir.me, by: me() }; mirSend(m); onControl(m); }
+    else mirSend({ type: 'control:claim' });
+  }
+  function release() {
+    if (!controlling()) return;
+    if (mir.chan && !(live && live.ready)) { var m = { type: 'control', id: null, by: null }; mirSend(m); onControl(m); }
+    else mirSend({ type: 'control:release' });
+  }
+  function onControl(m) {
+    var was = mir.controller, wasMine = controlling(), wasFollowing = following();
+    mir.controller = m.id ? { id: m.id, by: m.by } : null;
+    if (mir.awaitFirst) { // acabou de entrar: ninguém no controle → a principal assume
+      mir.awaitFirst = false;
+      if (!m.id && prefs.screenRole !== 'espelho') { claim(); return; }
+    }
+    if (following()) {
+      mir.lost = false; mir.last = Date.now();
+      if (st.arming) disarm();
+      if (auto.on) { stopVoice(); auto.on = false; auto.source = null; renderSpeed(); } // o espelho não usa a voz
+      if (wasMine) ui.toast(U.esc(m.by || 'Outra tela') + ' assumiu o controle. Esta tela agora espelha.', 'info', 4500);
+    } else if (!m.id && wasFollowing) {
+      // a principal caiu: continua rolando no último ritmo e, se ninguém assumir, esta tela assume
+      mir.lost = true;
+      clearTimeout(mir.failTimer);
+      mir.failTimer = setTimeout(function () {
+        if (mir.controller) return; // outra tela já assumiu
+        claim(); auto.on = false; renderSpeed();
+        ui.toast('A tela principal caiu. Esta tela assumiu o controle, no manual.', 'warn', 5000);
+      }, 1500);
+    } else if (controlling()) {
+      mir.lost = false; mir.dirty = true;
+    }
+    renderMirror(); renderPlay();
+    if (was && !m.id && wasMine) { /* soltou o controle */ }
+  }
+  function onMirrorState(m) {
+    if (!following() || (m.from && m.from !== mir.controller.id)) return;
+    mir.last = Date.now(); mir.wpm = m.wpm || null;
+    if (mir.lost) { mir.lost = false; renderMirror(); }
+    st.started = !!m.started; st.startedAt = m.startedAt || st.startedAt; st.elapsedMs = m.elapsedMs || 0;
+    if (st.running !== !!m.running) { st.running = !!m.running; st.lastTick = performance.now(); renderPlay(); }
+    // segue a posição: salto se estiver longe, ajuste suave se estiver perto
+    var target = yOfWord(m.pos) - lineY(), diff = target - st.pos;
+    if (Math.abs(diff) > el.scroller.clientHeight * 0.4 || (!st.running && Math.abs(diff) > 1)) { setPos(target, true); updateCurrent(); }
+    else { st.pos += diff * 0.35; el.scroller.scrollTop = st.pos; }
+  }
+  function mirrorTick() {
+    if (!mirReady()) return;
+    var now = Date.now();
+    if (controlling()) {
+      if (mir.dirty || now - mir.lastSent > (st.running ? 250 : 1000)) {
+        mir.dirty = false; mir.lastSent = now;
+        mirSend({ type: 'mirror:state', pos: Math.round(wordPos() * 100) / 100, running: st.running, wpm: wpm(), elapsedMs: Math.round(st.elapsedMs), started: st.started, startedAt: st.startedAt });
+      }
+    } else if (following() && !mir.lost && now - mir.last > 3000) {
+      mir.lost = true; renderMirror(); renderPlay(); // a principal parou de mandar a posição (travou ou caiu)
+    }
+  }
+  function takeOver() {
+    if (!following() && !(mir.controller === null && mirReady())) return;
+    claim();
+    auto.on = false; renderSpeed(); // assume no manual
+    ui.toast('Você assumiu o controle. Esta tela agora é a principal.', 'ok', 3000);
+  }
+  function renderMirror() {
+    document.body.classList.toggle('is-following', following());
+    var b = ui.$('#mirror-banner');
+    if (following() && mir.lost) {
+      b.hidden = false;
+      b.innerHTML = icon('triangle-alert', { size: 16 }) + '<span>A tela principal parou de responder. Esta tela continua rolando.</span>' +
+        '<button type="button" class="btn btn-sm btn-primary" data-takeover>Assumir controle</button>';
+    } else if (!mir.controller && mirReady() && prefs.screenRole === 'espelho' && st.started) {
+      b.hidden = false;
+      b.innerHTML = icon('info', { size: 16 }) + '<span>Nenhuma tela está no controle.</span>' +
+        '<button type="button" class="btn btn-sm btn-primary" data-takeover>Assumir controle</button>';
+    } else { b.hidden = true; b.innerHTML = ''; }
+  }
+  ui.$('#mirror-banner').addEventListener('click', function (e) { if (e.target.closest('[data-takeover]')) takeOver(); });
+  function setRole(role) {
+    prefs.screenRole = role; S.setPrefs(prefs);
+    if (role === 'espelho') release();
+    else if (!mir.controller && mirReady()) claim();
+    renderMirror(); renderPlay();
+  }
+  /* Sem backend: janelas do mesmo navegador conversam por BroadcastChannel. */
+  function connectLocalMirror() {
+    if (GF.api.sync.enabled() || !window.BroadcastChannel) return;
+    mir.me = U.uid('tela');
+    try { mir.chan = new BroadcastChannel('globoflow-tp-' + script.id); } catch (e) { mir.chan = null; return; }
+    mir.chan.onmessage = function (ev) {
+      var m = ev.data || {};
+      if (m.from === mir.me) return;
+      if (m.type === 'control:who') { if (controlling()) mirSend({ type: 'control', id: mir.me, by: me() }); }
+      else if (m.type === 'control') onControl(m);
+      else if (m.type === 'mirror:state') onMirrorState(m);
+    };
+    window.addEventListener('pagehide', function () { if (controlling()) mirSend({ type: 'control', id: null, by: null }); });
+    mirSend({ type: 'control:who' });
+    setTimeout(function () { if (mir.awaitFirst) onControl({ type: 'control', id: null }); }, 500); // ninguém respondeu
+  }
+
   /* ---------------- tempo real (backend) ---------------- */
   var live = null;
   function onTracker(m) {
@@ -816,6 +955,9 @@
     if (!GF.api.sync.enabled()) return;
     live = GF.api.live(script.id, script);
     live.on('tracker', onTracker);
+    live.on('hello', function (m) { mir.me = m.cid; });
+    live.on('control', onControl);
+    live.on('mirror:state', onMirrorState);
     live.on('hello', function () { live.wasReady = true; });
     live.on('speech:transcript', function (m) { if (auto.engine === 'deepgram') feedWords(m.text, m.final); });
     live.on('speech:error', function (m) {
@@ -826,6 +968,7 @@
     });
     live.on('open', function () {
       voiceBack();
+      mir.awaitFirst = true; // a primeira mensagem "control" diz se alguém já está no controle
       // reenvia o estado das âncoras marcadas antes da conexão
       Object.keys(st.anchors).forEach(function (id) { if (st.anchors[id] !== 'pendente') live.send({ type: 'anchor', id: id, state: st.anchors[id] }); });
       live.send({ type: 'position', wordIndex: wordAtLine() });
@@ -1120,7 +1263,11 @@
   }
   function renderPlay() {
     var b = ui.$('#c-play');
-    if (st.arming) {
+    if (following()) {
+      b.innerHTML = icon('radio', { size: 22 }) + '<span>Assumir controle</span>';
+      b.setAttribute('aria-label', 'Esta tela está espelhando ' + (mir.controller.by || 'a tela principal') + '. Assumir o controle');
+      b.title = 'Espelhando ' + (mir.controller.by || 'a tela principal') + '. Aperte para assumir o controle.';
+    } else if (st.arming) {
       b.innerHTML = icon('mic', { size: 22 }) + '<span>Ouvindo…</span>';
       b.setAttribute('aria-label', 'Esperando o apresentador começar a ler. Aperte para começar já (espaço)');
       b.title = 'Esperando a leitura. Aperte para começar já.';
@@ -1133,7 +1280,8 @@
     b.classList.toggle('is-arming', !!st.arming);
     var t = ui.$('#tally');
     t.className = 'tally' + (st.running ? ' is-live' : '');
-    t.innerHTML = '<i></i>' + (st.running ? 'No ar' : st.arming ? 'Aguardando leitura' : st.started ? 'Pausado' : 'Pronto');
+    t.innerHTML = '<i></i>' + (following() ? (mir.lost ? 'Principal sem resposta' : 'Espelho') : st.running ? 'No ar' : st.arming ? 'Aguardando leitura' : st.started ? 'Pausado' : 'Pronto');
+    t.title = following() ? 'Espelhando ' + (mir.controller.by || 'a tela principal') : '';
     renderEditState();
   }
   var ticks = false;
@@ -1187,6 +1335,10 @@
       '<div class="field"><label for="p-mic">Microfone</label><select class="select" id="p-mic"><option value="">Padrão do sistema</option></select>' +
         '<p class="field-hint">Usado na voz pelo servidor. Sem backend, vale o padrão do sistema.</p></div>' +
       '<div class="pop-switches">' +
+        '<div class="field"><span class="field-label">Esta tela</span><div class="seg seg-full" role="radiogroup" aria-label="Papel desta tela" id="p-role">' +
+          '<button type="button" data-v="principal" aria-pressed="' + (prefs.screenRole !== 'espelho') + '">Principal</button>' +
+          '<button type="button" data-v="espelho" aria-pressed="' + (prefs.screenRole === 'espelho') + '">Espelho (reserva)</button></div>' +
+          '<p class="field-hint">' + (mir.controller ? (controlling() ? 'Esta tela está no controle.' : 'Espelhando ' + U.esc(mir.controller.by || 'outra tela') + '.') : mirReady() ? 'Nenhuma tela no controle.' : 'Sem outras telas conectadas.') + '</p></div>' +
         sw('p-voicestart', 'Começar pela voz', !!prefs.voiceStart) +
         sw('p-autospeed', 'Velocidade automática', auto.on) +
         sw('p-upper', 'Texto em maiúsculas', prefs.upper !== false) +
@@ -1219,6 +1371,8 @@
     });
     p.addEventListener('click', function (e) {
       if (e.target.closest('[data-closepop]')) return closePop();
+      var rb = e.target.closest('#p-role button');
+      if (rb) { setRole(rb.dataset.v); ui.$$('#p-role button', p).forEach(function (x) { x.setAttribute('aria-pressed', String(x === rb)); }); }
       var c = e.target.closest('#p-ct button');
       if (c) { setPref('contrast', c.dataset.v); ui.$$('#p-ct button', p).forEach(function (x) { x.setAttribute('aria-pressed', String(x === c)); }); }
       if (e.target.closest('[data-full]')) fullscreen();
@@ -1324,6 +1478,7 @@
   /* Ações de leitura com tecla configurável (Configurações → Atalhos). */
   var keyMap = GF.keys.map(prefs);
   function runKey(act) {
+    if (following()) { if (act === 'toggle' && (!lock.on || mir.lost)) takeOver(); return; }
     if (act === 'toggle') toggle();
     else if (act === 'faster') setSpeed(prefs.speed + 1);
     else if (act === 'slower') setSpeed(prefs.speed - 1);
@@ -1386,6 +1541,7 @@
   var restoreWord = restored && restored.scriptId === script.id && restored.wordIndex ? restored.wordIndex : null;
   if (restoreWord != null) goWord(restoreWord);
   connectLive();
+  connectLocalMirror();
 
   /* sem roteiro: lista para escolher */
   function renderPicker() {
