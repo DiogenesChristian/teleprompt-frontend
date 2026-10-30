@@ -73,7 +73,8 @@
     el.textContent = st.dirty ? 'Salvando…' : 'Salvo às ' + U.time(script.updatedAt);
   }
   function save(silent) {
-    if (script.status === 'aprovado' && st.contentChanged) {
+    // Sem backend, a regra é local. Com backend, quem decide é o servidor (evento gf:status abaixo).
+    if (script.status === 'aprovado' && st.contentChanged && !GF.api.sync.enabled()) {
       S.addRevision(script, { kind: 'edicao', blockId: null, before: '', after: '', note: 'Texto alterado depois da aprovação; roteiro voltou para revisão.' });
       script.status = 'em-revisao'; script.approvedBy = null; script.approvedAt = null;
       ui.toast('O texto mudou depois da aprovação. O roteiro voltou para revisão.', 'warn', 4500);
@@ -481,8 +482,26 @@
   document.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); } });
   window.addEventListener('pagehide', function () { if (st.dirty) save(true); });
   // Outra aba (ex.: painel de edição do teleprompter) salvou este roteiro: atualiza aqui se não houver nada pendente.
-  window.addEventListener('storage', function (e) {
-    if (e.key !== 'globoflow:scripts' || st.dirty) return;
+  window.addEventListener('storage', function (e) { if (e.key === 'globoflow:scripts') refreshFromStore(false); });
+  window.addEventListener('gf:synced', function () { refreshFromStore(false); }); // veio do servidor
+  /* Aprovação decidida pelo servidor depois de salvar. */
+  window.addEventListener('gf:status', function (e) {
+    var d = e.detail || {}; if (d.id !== script.id) return;
+    script.status = d.status; script.approvedBy = d.approvedBy; script.approvedAt = d.approvedAt;
+    renderApproval();
+    if (d.before === 'aprovado' && d.status !== 'aprovado') ui.toast('O texto mudou depois da aprovação. O roteiro voltou para revisão.', 'warn', 4500);
+  });
+  /* Roteiro no ar e esta função não pode alterar o texto agora: volta à versão do servidor e trava a edição. */
+  window.addEventListener('gf:live-edit-denied', function (e) {
+    var d = e.detail || {}; if (d.id !== script.id || st.locked) return;
+    st.locked = true; st.dirty = false; clearTimeout(autoTimer);
+    ui.$('.ed-head').insertAdjacentHTML('afterbegin', '<div class="notice notice-warn" id="ed-locked">' + icon('lock', { size: 16 }) +
+      '<span>' + ui.esc(d.message || 'O roteiro está no ar.') + ' Para editar, peça a quem tem permissão ou espere a transmissão acabar e recarregue a página.</span></div>');
+    lockInputs();
+  });
+  function lockInputs() { ui.$$('#main input, #main textarea, #main select').forEach(function (x) { x.disabled = true; }); ui.$('#btn-add').disabled = true; }
+  function refreshFromStore(force) {
+    if (st.dirty && !force) return;
     var fresh = S.getScript(script.id); if (!fresh) return;
     var sig = function (x) { return JSON.stringify([x.title, x.blocks, x.anchors, x.covers || [], x.status]); };
     if (sig(fresh) === sig(script)) return;
@@ -493,7 +512,8 @@
     if (st.mode === 'preview') renderPreview();
     var back = aid && document.getElementById(aid);
     if (back) { back.focus({ preventScroll: true }); try { back.setSelectionRange(s0, s1); } catch (err) { /* campo sem seleção */ } }
-  });
+    if (st.locked) lockInputs();
+  }
   GF.net.on(function () { if (st.review.status !== 'loading') renderAI(); });
 
   renderBlocks();

@@ -1082,6 +1082,14 @@
   }
   function renderEdit() {
     var d = ed.draft;
+    if (ed.denied) {
+      edEl.innerHTML =
+        '<div class="le-head"><div class="le-head-t"><h2>Editar roteiro</h2><p class="le-sub">Somente leitura</p></div>' +
+          '<button type="button" class="icon-btn" data-le="close" aria-label="Fechar edição">' + icon('x', { size: 18 }) + '</button></div>' +
+        '<div class="le-body"><div class="notice notice-warn" id="le-denied" tabindex="-1">' + icon('lock', { size: 16 }) + '<span>' + U.esc(ed.deniedMsg || 'O roteiro está no ar.') +
+          ' Sua alteração não foi gravada e a tela mostra a versão do servidor.</span></div></div>';
+      return;
+    }
     edEl.innerHTML =
       '<div class="le-head"><div class="le-head-t"><h2>Editar roteiro</h2><p class="le-sub" id="le-sub"></p></div>' +
         '<button type="button" class="icon-btn" data-le="close" aria-label="Fechar edição">' + icon('x', { size: 18 }) + '</button></div>' +
@@ -1099,7 +1107,7 @@
   }
   function grow(t) { t.style.height = 'auto'; t.style.height = Math.max(96, t.scrollHeight + 2) + 'px'; }
   function renderEditState() {
-    if (!ed.open) return;
+    if (!ed.open || ed.denied) return;
     var sub = ui.$('#le-sub', edEl), state = ui.$('#le-state', edEl);
     sub.textContent = st.running ? 'A leitura continua enquanto você edita' : st.started ? 'Teleprompter pausado' : 'Teleprompter não iniciado';
     state.className = 'le-state' + (ed.dirty ? ' is-dirty' : '');
@@ -1146,8 +1154,28 @@
     ui.$('#btn-edit').classList.add('is-on');
     var cur = ui.$('.le-topic.is-current', edEl);
     if (cur) { panelScroll(cur, 'start'); ui.$('.le-text', cur).focus({ preventScroll: true }); }
-    else ui.$('#le-title', edEl).focus({ preventScroll: true });
+    else { var tt = ui.$('#le-title', edEl) || ui.$('[data-le=close]', edEl); if (tt) tt.focus({ preventScroll: true }); }
   }
+  /* Servidor recusou: o roteiro está no ar e esta função não pode alterar o texto agora. */
+  window.addEventListener('gf:live-edit-denied', function (e) {
+    var d = e.detail || {}; if (d.id !== script.id) return;
+    ed.denied = true; ed.deniedMsg = d.message; ed.dirty = false; clearTimeout(liveTimer);
+    if (ed.open) {
+      var typing = edEl.contains(document.activeElement);
+      renderEdit();
+      // quem estava digitando continua com o foco no painel: as próximas teclas não viram atalhos
+      if (typing) { var c = ui.$('#le-denied', edEl); if (c) c.focus({ preventScroll: true }); } // (num botão, o espaço apertaria o botão)
+    }
+  });
+  /* Versão nova vinda do servidor (conflito, edição recusada, sincronização). */
+  window.addEventListener('gf:synced', function () { var fresh = S.getScript(script.id); if (fresh) applyFresh(fresh); });
+  /* Aprovação decidida pelo servidor depois de salvar. */
+  window.addEventListener('gf:status', function (e) {
+    var d = e.detail || {}; if (d.id !== script.id) return;
+    script.status = d.status; script.approvedBy = d.approvedBy; script.approvedAt = d.approvedAt;
+    renderHeader();
+    if (d.before === 'aprovado' && d.status !== 'aprovado') ui.toast('Como o texto mudou, o roteiro voltou para revisão.', 'info', 3500);
+  });
   function closeEdit(force) {
     if (!ed.open) return;
     if (ed.dirty) saveEdit(); // aplica o que ainda estava esperando
@@ -1160,6 +1188,7 @@
   }
   function onEditExternal() {
     // Outra aba, o editor completo ou outro computador salvou enquanto o painel estava aberto.
+    if (ed.denied) return;
     if (!ed.dirty) {
       var a = document.activeElement, aid = a && edEl.contains(a) && a.id, s0 = a && a.selectionStart, s1 = a && a.selectionEnd;
       var keep = ui.$('#le-body', edEl).scrollTop;
@@ -1174,7 +1203,7 @@
   }
   function saveEdit() {
     clearTimeout(liveTimer);
-    if (!ed.open || !ed.dirty) return;
+    if (!ed.open || !ed.dirty || ed.denied) return;
     var d = ed.draft;
     if (!d.title.trim()) { ed.dirty = false; renderEditState(); return; } // espera ter um título principal
     var contentSig = function (s) { return s.blocks.map(function (b) { return b.id + '|' + b.text; }).join('§'); };
@@ -1187,7 +1216,7 @@
     });
     var backToReview = false;
     if (contentSig(out) !== contentSig(latest)) {
-      if (out.status === 'aprovado') {
+      if (out.status === 'aprovado' && !GF.api.sync.enabled()) { // sem backend, a regra é local; com backend, o servidor decide
         S.addRevision(out, { kind: 'edicao', blockId: null, before: '', after: '', note: 'Roteiro alterado durante a transmissão; voltou para revisão.' });
         out.status = 'em-revisao'; out.approvedBy = null; out.approvedAt = null;
         backToReview = true; ed.logged = true;
@@ -1205,6 +1234,7 @@
   }
 
   edEl.addEventListener('input', function (e) {
+    if (ed.denied) return;
     var t = e.target;
     if (t.id === 'le-title') { ed.draft.title = t.value; return setDirty(); }
     var art = t.closest('[data-le-block]'); if (!art) return;

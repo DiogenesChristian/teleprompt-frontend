@@ -142,6 +142,23 @@
   var pending = {};
   function notify(msg, tone) { if (GF.ui && GF.ui.toast) GF.ui.toast(msg, tone || 'warn', 4500); }
 
+  function fire(type, detail) { try { root.dispatchEvent(new CustomEvent(type, { detail: detail })); } catch (e) { /* noop */ } }
+  /* O servidor recusou a edição porque o roteiro está no ar e esta função não pode
+   * alterar o texto agora. Avisa uma vez (não a cada tecla), traz de volta a versão
+   * do servidor e avisa as telas para travar a edição. */
+  var deniedAt = {};
+  function liveEditDenied(id, message, quiet) {
+    var now = Date.now();
+    if (!quiet && (!deniedAt[id] || now - deniedAt[id] > 30000)) notify(message + ' Sua alteração não foi gravada.', 'crit');
+    deniedAt[id] = now;
+    fire('gf:live-edit-denied', { id: id, message: message });
+    call('GET', '/api/scripts/' + encodeURIComponent(id)).then(function (d) {
+      if (!d || !d.script) return;
+      GF.store.putScript(Object.assign(d.script, { syncedAt: d.script.updatedAt }));
+      fire('gf:synced', { id: id });
+    }).catch(function () { /* sem conexão: fica como está */ });
+  }
+
   var sync = {
     enabled: function () { return !!base() && !!token(); },
 
@@ -151,7 +168,8 @@
       pending[script.id] = setTimeout(function () {
         delete pending[script.id];
         call('PUT', '/api/scripts/' + encodeURIComponent(script.id), script).then(function (data) {
-          GF.store.markSynced(script.id, data.script.updatedAt);
+          // a aprovação é decidida pelo servidor (regras da edição ao vivo): a tela adota o que ele gravou
+          GF.store.markSynced(script.id, data.script.updatedAt, data.script);
         }, function (err) {
           // 409: outra pessoa salvou antes. O servidor devolve a versão atual; ela substitui a deste aparelho.
           if (err.status === 409 && err.data && err.data.script) {
@@ -160,6 +178,7 @@
             notify(err.message, 'crit');
             return;
           }
+          if (err.status === 403 && err.code === 'live-edit') return liveEditDenied(script.id, err.message, quiet);
           if (err.status === 403 && !quiet) notify(err.message + ' A alteração ficou só neste aparelho.', 'crit');
           // sem conexão: fica salvo aqui e sobe na próxima sincronização
         });

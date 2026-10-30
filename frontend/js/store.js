@@ -164,11 +164,21 @@
     if (i >= 0) list[i] = script; else list.unshift(script);
     write('scripts', list);
   }
-  function markSynced(id, updatedAt) {
+  function markSynced(id, updatedAt, server) {
     var list = getScripts(), s = list.filter(function (x) { return x.id === id; })[0];
     if (!s) return;
     s.syncedAt = updatedAt; s.updatedAt = updatedAt; // relógio do servidor é a referência
+    // aprovação: quem decide é o servidor (ex.: edição ao vivo por Jornalista / Editor mantém aprovado)
+    var before = s.status, changed = false;
+    if (server && (server.status !== s.status || server.approvedBy !== s.approvedBy)) {
+      s.status = server.status; s.approvedBy = server.approvedBy || null; s.approvedAt = server.approvedAt || null;
+      if (Array.isArray(server.revisions)) s.revisions = server.revisions;
+      changed = true;
+    }
     write('scripts', list);
+    if (changed) {
+      try { root.dispatchEvent(new CustomEvent('gf:status', { detail: { id: id, before: before, status: s.status, approvedBy: s.approvedBy, approvedAt: s.approvedAt } })); } catch (e) { /* noop */ }
+    }
   }
   function blankScript(partial) {
     var bid = util.uid('b');
