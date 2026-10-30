@@ -37,7 +37,7 @@ Tudo fica em `frontend/js/config.js`:
 
 - **Roteiros** (`index.html`): próximo roteiro no ar, busca e lista (com o número de tópicos).
 - **Editor** (`editor.html`): título principal, programa, apresentador, duração e horário; **tópicos** com título, texto e duração, que podem ser criados, movidos e excluídos; visão **Roteiro completo** (só leitura); âncoras; **nota coberta**; marcações técnicas; revisão com IA; aprovação; registro de alterações. Salva sozinho enquanto a pessoa digita. O botão **Transmissão** abre a tela ao vivo (ou **Voltar à transmissão**, se já houver uma em andamento).
-- **Teleprompter / transmissão** (`teleprompter.html`): retranca e tópico atual no topo, próximo tópico, rolagem manual ou automática pela voz, edição sem parar, modo bloqueio, espelho, âncoras, tempo, ajustes de leitura e atalhos.
+- **Teleprompter / transmissão** (`teleprompter.html`): retranca e tópico atual no topo, próximo tópico, rolagem manual ou automática pela voz, edição sem parar, modo bloqueio, tela reserva, âncoras, tempo, ajustes de leitura e atalhos.
 - **Histórico** (`historico.html`): apresentações encerradas, com tempo real e âncoras ditas.
 - **Configurações** (`configuracoes.html`): preferências de leitura, atalhos do teleprompter, dados do aparelho, instalação do app.
 - **Login** (`login.html`): nome, função e senha. Funções: Apresentador, Jornalista / Editor e Produtor.
@@ -55,7 +55,7 @@ Tudo fica em `frontend/js/config.js`:
   - **O manual tem prioridade:** rolar com o mouse ou mexer na velocidade desliga o automático. Quando a voz cai e volta, quem está no manual continua no manual (só recebe um aviso).
   - **Microfone:** escolhido em Ajustes (vale para a voz pelo servidor; o reconhecimento do navegador usa o padrão do sistema).
 - **Modo bloqueio** (cadeado ou `L`): só o texto na tela. As teclas de leitura continuam funcionando sem mostrar nada (pode desligar em Configurações). Para sair, segure o cadeado ou `Esc` por 1,5 s.
-- **Espelho (Disaster Recovery):** a primeira tela que abre o roteiro é a **principal**; as outras viram **espelho** e seguem posição, velocidade e tempo. Se a principal cair, o espelho continua rolando e assume em 1,5 s, no manual; se ela travar sem cair, aparece **Assumir controle**. Quem volta vira espelho. Funciona entre computadores (backend) e entre janelas do mesmo navegador (sem backend). Em Ajustes, **Esta tela: Espelho (reserva)** faz a tela só acompanhar.
+- **Tela principal e reserva (Disaster Recovery):** a primeira tela que abre o roteiro é a **principal** (selo PRINCIPAL quando há outra tela aberta); as outras viram **reserva** (selo RESERVA) e seguem posição, velocidade e tempo. Se a principal cair, a reserva continua rolando e assume em 1,5 s, no manual; se ela travar sem cair, aparece **Assumir controle**. Quem volta vira reserva. Funciona entre computadores (backend) e entre janelas do mesmo navegador (sem backend). Em Ajustes, **Esta tela: Reserva** faz a tela só acompanhar.
 - **Navegação:** saindo para o editor e voltando, a transmissão retoma pausada no mesmo ponto, com o mesmo tempo e as mesmas âncoras. **Encerrar** manda a apresentação para o histórico.
 - **Âncoras:** informações que não podem faltar. Ficam em negrito e numa lista com estado (pendente, dita, pulada); com voz, são marcadas pela fala.
 - **Tempo:** compara o tempo decorrido com o planejado até o ponto do texto (verde, amarelo, vermelho).

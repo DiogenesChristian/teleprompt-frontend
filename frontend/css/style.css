@@ -738,3 +738,14 @@ ins.d { background: rgba(47, 191, 113, .2); color: #A6F0C6; text-decoration: non
 .mirror-banner .ico { color: var(--warn); flex: none; }
 .mirror-banner span { min-width: 0; }
 .is-locked .mirror-banner { display: none !important; }
+
+/* selo da tela principal (quando há reserva aberta) */
+.role-chip { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; margin-right: 4px; border-radius: 6px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; background: var(--ok-soft); color: var(--ok-ink); }
+
+/* retranca (tema do assunto) maior que o texto do roteiro */
+.tp-head { font-size: calc(var(--fs, 48px) * 1.12); margin-bottom: .3em; }
+.tp-head .retranca { line-height: 1.15; padding: .08em .35em; }
+.tp-head .tp-upd { font-size: max(13px, calc(var(--fs, 48px) * .3)); }
+.tb-title.retranca { font-size: 24px; padding: 4px 12px; }
+@media (max-width: 767px) { .tb-title.retranca { font-size: 19px; } }
+@media (min-width: 1280px) { .tb-title.retranca { font-size: 28px; } }

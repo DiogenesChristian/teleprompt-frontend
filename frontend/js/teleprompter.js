@@ -80,6 +80,7 @@
       '<span class="mob-time ok" id="mob-time" aria-hidden="true">0:00</span>' +
       '<div class="studio-tools">' +
         '<span class="upd-chip" id="upd-chip" role="status" hidden></span>' +
+        '<span class="role-chip" id="role-chip" hidden>Principal</span>' +
         '<span class="tally" id="tally"></span>' +
         '<span data-conn></span>' +
         '<button type="button" class="btn btn-sm edit-btn" id="btn-edit" aria-controls="live-edit" aria-expanded="false" title="Editar o roteiro sem parar o teleprompter (E)">' + icon('square-pen', { size: 16 }) + '<span>Editar roteiro</span></button>' +
@@ -794,7 +795,16 @@
    *   no comando (o manual tem prioridade).
    * - A tela abre como principal se ninguém estiver no controle; em Ajustes dá
    *   para marcar "Esta tela: espelho (reserva)", que ao abrir só acompanha. */
-  var mir = { me: null, controller: null, last: 0, wpm: null, lost: false, dirty: false, lastSent: 0, awaitFirst: true, chan: null };
+  var mir = { me: null, controller: null, last: 0, wpm: null, lost: false, dirty: false, lastSent: 0, awaitFirst: true, chan: null, peers: 0, peerAt: 0, peerSent: 0 };
+  // há outra tela aberta neste roteiro? (backend: contagem da sala; sem backend: sinal das outras janelas)
+  function hasPeers() { return mir.chan && !(live && live.ready) ? Date.now() - mir.peerAt < 5000 : mir.peers > 0; }
+  function renderRole() {
+    var c = ui.$('#role-chip'); if (!c) return;
+    var show = controlling() && hasPeers();
+    if (c.hidden === !show) return;
+    c.hidden = !show;
+    c.title = show ? 'Esta tela controla a leitura; as outras telas abertas neste roteiro são reserva.' : '';
+  }
   function following() { return !!(mir.controller && mir.controller.id && mir.controller.id !== mir.me); }
   function controlling() { return !!(mir.controller && mir.controller.id === mir.me); }
   function mirReady() { return !!((live && live.ready) || mir.chan); }
@@ -823,7 +833,7 @@
       mir.lost = false; mir.last = Date.now();
       if (st.arming) disarm();
       if (auto.on) { stopVoice(); auto.on = false; auto.source = null; renderSpeed(); } // o espelho não usa a voz
-      if (wasMine) ui.toast(U.esc(m.by || 'Outra tela') + ' assumiu o controle. Esta tela agora espelha.', 'info', 4500);
+      if (wasMine) ui.toast(U.esc(m.by || 'Outra tela') + ' assumiu o controle. Esta tela agora é a reserva.', 'info', 4500);
     } else if (!m.id && wasFollowing) {
       // a principal caiu: continua rolando no último ritmo e, se ninguém assumir, esta tela assume
       mir.lost = true;
@@ -861,6 +871,9 @@
     } else if (following() && !mir.lost && now - mir.last > 3000) {
       mir.lost = true; renderMirror(); renderPlay(); // a principal parou de mandar a posição (travou ou caiu)
     }
+    // sem backend, a reserva avisa de tempos em tempos que está aberta (para a principal mostrar o selo)
+    if (mir.chan && !(live && live.ready) && !controlling() && now - mir.peerSent > 2000) { mir.peerSent = now; mirSend({ type: 'peer' }); }
+    renderRole();
   }
   function takeOver() {
     if (!following() && !(mir.controller === null && mirReady())) return;
@@ -896,6 +909,7 @@
     mir.chan.onmessage = function (ev) {
       var m = ev.data || {};
       if (m.from === mir.me) return;
+      mir.peerAt = Date.now(); // outra janela deste roteiro está aberta
       if (m.type === 'control:who') { if (controlling()) mirSend({ type: 'control', id: mir.me, by: me() }); }
       else if (m.type === 'control') onControl(m);
       else if (m.type === 'mirror:state') onMirrorState(m);
@@ -955,6 +969,7 @@
     if (!GF.api.sync.enabled()) return;
     live = GF.api.live(script.id, script);
     live.on('tracker', onTracker);
+    live.on('presence', function (m) { mir.peers = Math.max(0, (m.count || 1) - 1); renderRole(); });
     live.on('hello', function (m) { mir.me = m.cid; });
     live.on('control', onControl);
     live.on('mirror:state', onMirrorState);
@@ -1295,8 +1310,8 @@
     var b = ui.$('#c-play');
     if (following()) {
       b.innerHTML = icon('radio', { size: 22 }) + '<span>Assumir controle</span>';
-      b.setAttribute('aria-label', 'Esta tela está espelhando ' + (mir.controller.by || 'a tela principal') + '. Assumir o controle');
-      b.title = 'Espelhando ' + (mir.controller.by || 'a tela principal') + '. Aperte para assumir o controle.';
+      b.setAttribute('aria-label', 'Esta tela é a reserva de ' + (mir.controller.by || 'a tela principal') + '. Assumir o controle');
+      b.title = 'Reserva de ' + (mir.controller.by || 'a tela principal') + '. Aperte para assumir o controle.';
     } else if (st.arming) {
       b.innerHTML = icon('mic', { size: 22 }) + '<span>Ouvindo…</span>';
       b.setAttribute('aria-label', 'Esperando o apresentador começar a ler. Aperte para começar já (espaço)');
@@ -1310,8 +1325,9 @@
     b.classList.toggle('is-arming', !!st.arming);
     var t = ui.$('#tally');
     t.className = 'tally' + (st.running ? ' is-live' : '');
-    t.innerHTML = '<i></i>' + (following() ? (mir.lost ? 'Principal sem resposta' : 'Espelho') : st.running ? 'No ar' : st.arming ? 'Aguardando leitura' : st.started ? 'Pausado' : 'Pronto');
-    t.title = following() ? 'Espelhando ' + (mir.controller.by || 'a tela principal') : '';
+    t.innerHTML = '<i></i>' + (following() ? (mir.lost ? 'Principal sem resposta' : 'Reserva') : st.running ? 'No ar' : st.arming ? 'Aguardando leitura' : st.started ? 'Pausado' : 'Pronto');
+    t.title = following() ? 'Reserva: acompanha ' + (mir.controller.by || 'a tela principal') : '';
+    renderRole();
     renderEditState();
   }
   var ticks = false;
@@ -1367,8 +1383,8 @@
       '<div class="pop-switches">' +
         '<div class="field"><span class="field-label">Esta tela</span><div class="seg seg-full" role="radiogroup" aria-label="Papel desta tela" id="p-role">' +
           '<button type="button" data-v="principal" aria-pressed="' + (prefs.screenRole !== 'espelho') + '">Principal</button>' +
-          '<button type="button" data-v="espelho" aria-pressed="' + (prefs.screenRole === 'espelho') + '">Espelho (reserva)</button></div>' +
-          '<p class="field-hint">' + (mir.controller ? (controlling() ? 'Esta tela está no controle.' : 'Espelhando ' + U.esc(mir.controller.by || 'outra tela') + '.') : mirReady() ? 'Nenhuma tela no controle.' : 'Sem outras telas conectadas.') + '</p></div>' +
+          '<button type="button" data-v="espelho" aria-pressed="' + (prefs.screenRole === 'espelho') + '">Reserva</button></div>' +
+          '<p class="field-hint">' + (mir.controller ? (controlling() ? 'Esta tela está no controle.' : 'Esta tela é a reserva de ' + U.esc(mir.controller.by || 'outra tela') + '.') : mirReady() ? 'Nenhuma tela no controle.' : 'Sem outras telas conectadas.') + '</p></div>' +
         sw('p-voicestart', 'Começar pela voz', !!prefs.voiceStart) +
         sw('p-autospeed', 'Velocidade automática', auto.on) +
         sw('p-upper', 'Texto em maiúsculas', prefs.upper !== false) +
