@@ -55,7 +55,7 @@
     anchors: {}, auto: {}, filter: 'todas',
     updated: {}, unseen: [],
     pxPerWord: 30, sheet: null, pop: null, drawer: false, wake: null,
-    behind: [], off: false, bridge: null, cut: null, serverPos: null,
+    behind: [], off: false, bridge: null, cut: null, serverPos: null, voiceBlock: null,
     arming: false, voiceLost: false
   };
   script.anchors.forEach(function (a) { st.anchors[a.id] = 'pendente'; });
@@ -775,7 +775,14 @@
         if (m.anchors[id] === 'dita' && st.anchors[id] === 'pendente') { st.anchors[id] = 'dita'; st.auto[id] = true; marked = true; }
       });
     }
-    st.serverPos = { k: m.pos, at: Date.now() };
+    st.serverPos = { k: m.pos, at: Date.now() };    
+    // Tópico pela fala: o servidor diz em que tópico o apresentador está.
+    // Quando muda, o teleprompter vai para esse tópico e o título acompanha.
+    if (m.blockId && m.blockId !== st.voiceBlock) {
+      st.voiceBlock = m.blockId;
+      var bi = blockIndexOf(m.blockId);
+      if (voiceTracked() && bi >= 0 && bi !== st.cur) goBlock(bi);
+    }
     if (st.arming && m.reading) readingStarted(m.pos);
     var behind = m.behind || [], cut = m.cutPlan && m.cutPlan.tight ? m.cutPlan : null;
     var railChanged = marked || JSON.stringify(behind) !== JSON.stringify(st.behind) || JSON.stringify(cut) !== JSON.stringify(st.cut);
