@@ -109,3 +109,8 @@ Teclas fixas: `E` editar roteiro · `V` velocidade automática · `+` `−` font
 ## Backend
 
 Repositório `teleprompt-backend` (Node.js + Express + WebSocket + MongoDB, serviço de IA em Python, voz pela Deepgram). Regras de edição, aprovação e mensagens de tempo real estão no README de lá.
+
+
+## Voz acompanhando o texto
+
+Veja [alterações, roteiro de testes e demonstração na mentoria](docs/voz-acompanhando-texto.md).

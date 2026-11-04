@@ -33,7 +33,7 @@ test('localiza no roteiro o trecho que acabou de ser falado', () => {
   const script = P.words('Boa noite. O governo anunciou hoje um novo pacote de investimentos em infraestrutura.');
   const spoken = P.words('o governo anunciou hoje');
   const k = P.locate(script, spoken, 0);
-  assert.equal(script[k], 'um');
+  assert.equal(script[k], P.words('um')[0]);
 });
 
 test('não localiza fala que não está no roteiro', () => {
@@ -51,7 +51,7 @@ test('busca só perto da posição atual', () => {
 test('localiza com uma letra errada no reconhecimento', () => {
   const script = P.words('Boa noite. O governo anunciou hoje um novo pacote de investimentos.');
   const k = P.locate(script, P.words('governu anunciou hoje'), 0);
-  assert.equal(script[k], 'um');
+  assert.equal(script[k], P.words('um')[0]);
 });
 
 test('localiza quando o apresentador troca algumas palavras', () => {
@@ -64,4 +64,37 @@ test('localiza quando o apresentador troca algumas palavras', () => {
 test('palavra no singular ou plural conta como a mesma', () => {
   assert.ok(P.near('estados', 'estado'));
   assert.ok(!P.near('12', '13'));
+});
+
+for (const wpm of [90, 150, 220]) {
+  test(`rolagem acompanha ${wpm} ppm sem ultrapassar a fala`, () => {
+    let pos = 0;
+    const px = 20, dt = 1 / 60;
+    for (let frame = 0; frame < 600; frame++) {
+      const target = Math.floor(frame * dt * wpm / 60) * px;
+      const next = P.followPosition(pos, target, wpm / 60 * px, dt);
+      assert.ok(next >= pos && next <= target);
+      pos = next;
+    }
+    const paused = pos;
+    for (let frame = 0; frame < 120; frame++) pos = P.followPosition(pos, paused, 60, dt);
+    assert.equal(pos, paused);
+  });
+}
+
+test('retoma após repetição e mantém a posição ao reler', () => {
+  const script = P.words('A ministra Helena Duarte afirmou que as obras começam pelo Nordeste.');
+  const spoken = P.words('a ministra ministra Helena quer dizer Helena Duarte afirmou que as obras começam');
+  const k = P.locate(script, spoken, 0);
+  assert.equal(script[k], 'pelo');
+  assert.equal(P.locate(script, P.words('ministra Helena Duarte'), k), -1);
+});
+
+test('não usa palavras antigas para localizar improviso', () => {
+  const script = P.words('A ministra Helena Duarte anunciou obras no Nordeste.');
+  assert.equal(P.locate(script, P.words('ministra Helena Duarte anunciou viagem completamente diferente'), 0), -1);
+});
+
+test('números por extenso usam a mesma posição que os algarismos', () => {
+  assert.deepEqual(P.words('doze bilhões para quinze estados'), P.words('12 bilhões para 15 estados'));
 });

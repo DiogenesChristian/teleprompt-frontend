@@ -19,12 +19,14 @@
 
   function clamp(wpm) { return Math.max(MIN_WPM, Math.min(MAX_WPM, wpm)); }
 
+  var NUMS = {um:'1',uma:'1',dois:'2',duas:'2',tres:'3',quatro:'4',cinco:'5',seis:'6',sete:'7',oito:'8',nove:'9',dez:'10',onze:'11',doze:'12',treze:'13',quatorze:'14',catorze:'14',quinze:'15',dezesseis:'16',dezessete:'17',dezoito:'18',dezenove:'19',vinte:'20',trinta:'30',quarenta:'40',cinquenta:'50',sessenta:'60',setenta:'70',oitenta:'80',noventa:'90',cem:'100'};
+
   /* Texto → lista de palavras sem acento, pontuação ou marcações técnicas. */
   function words(text) {
     return String(text || '').replace(CUE_RE, ' ').toLowerCase()
       .normalize('NFD').replace(/[̀-ͯ]/g, '')
-      .replace(/r\$/g, ' ').replace(/[^a-z0-9%\s-]/g, ' ')
-      .split(/[\s-]+/).filter(Boolean);
+      .replace(/r\$/g, ' ').replace(/(\d)[.,](?=\d{3}\b)/g, '$1').replace(/[^a-z0-9%\s-]/g, ' ')
+      .split(/[\s-]+/).filter(Boolean).map(function (w) { return NUMS[w] || w; });
   }
 
   /* times: instantes (ms) em que cada palavra foi reconhecida. */
@@ -34,6 +36,13 @@
     if (recent.length < 4) return null;
     var span = Math.max(3000, now - recent[0]);
     return recent.length / span * 60000;
+  }
+
+  // Aproxima a linha da fala com suavidade e para no limite reconhecido.
+  function followPosition(pos, target, pixelsPerSecond, dt) {
+    var distance = Math.max(0, target - pos);
+    var speed = Math.max(pixelsPerSecond, distance * 3);
+    return pos + Math.min(distance, speed * Math.min(0.1, Math.max(0, dt)));
   }
 
   /* Ritmo para terminar no tempo: palavras restantes / segundos restantes. */
@@ -81,13 +90,18 @@
       for (var i = start; i <= end - tail.length; i++) {
         var ok = true;
         for (var j = 0; j < tail.length; j++) if (!eq(scriptWords[i + j], tail[j])) { ok = false; break; }
-        if (ok) return i + tail.length;
+        if (ok && i + tail.length >= fromIdx) return i + tail.length;
       }
       return -1;
     }
     var k = pass(function (a, b) { return a === b; });
     if (k < 0) k = pass(near);
-    if (k < 0) k = locateLoose(scriptWords, spoken, start, end);
+    if (k < 0) {
+      for (var size = Math.min(8, spoken.length); size >= 3; size--) {
+        var candidate = locateLoose(scriptWords, spoken.slice(-size), start, end);
+        if (candidate >= fromIdx) { k = candidate; break; }
+      }
+    }
     return k;
   }
   function locateLoose(scriptWords, spoken, start, end) {
@@ -95,18 +109,18 @@
     if (tail.length < 3) return -1;
     var need = Math.max(3, Math.ceil(tail.length * 0.6)), best = -1, bestHits = 0;
     for (var i = start; i < end; i++) {
-      var j = 0, k = i, hits = 0, last = -1, lim = Math.min(scriptWords.length, i + tail.length * 2 + 4);
+      var j = 0, k = i, hits = 0, last = -1, lastInput = -1, lim = Math.min(scriptWords.length, i + tail.length * 2 + 4);
       while (j < tail.length && k < lim) {
         if (STOP[scriptWords[k]]) { k++; continue; }
         var found = -1;
         for (var m = k; m < Math.min(lim, k + 4); m++) if (near(scriptWords[m], tail[j])) { found = m; break; }
-        if (found >= 0) { hits++; last = found; k = found + 1; }
+        if (found >= 0) { hits++; last = found; lastInput = j; k = found + 1; }
         j++;
       }
-      if (hits >= need && hits > bestHits) { bestHits = hits; best = last + 1; }
+      if (lastInput === tail.length - 1 && hits >= need && hits > bestHits) { bestHits = hits; best = last + 1; }
     }
     return best;
   }
 
-  return { MIN_WPM: MIN_WPM, MAX_WPM: MAX_WPM, clamp: clamp, words: words, spokenWpm: spokenWpm, wpmForTime: wpmForTime, locate: locate, near: near };
+  return { followPosition: followPosition, MIN_WPM: MIN_WPM, MAX_WPM: MAX_WPM, clamp: clamp, words: words, spokenWpm: spokenWpm, wpmForTime: wpmForTime, locate: locate, near: near };
 });
