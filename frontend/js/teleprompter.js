@@ -166,7 +166,7 @@
   function lineY() { return el.scroller.clientHeight * LINE; }
   function manualWpm() { return 60 + prefs.speed * 20; } // 1 → 80 … 10 → 260 palavras por minuto
   function wpm() {
-    if (following() && mir.wpm) return mir.wpm; // espelho: rola no ritmo da tela principal
+    if (following() && mir.wpm != null) return mir.wpm; // espelho: rola no ritmo da tela principal
     return auto.on && auto.source ? Math.round(auto.wpm) : manualWpm();
   }
   function applyPrefs() {
@@ -304,11 +304,11 @@
   /* ---------------- motor de rolagem e relógio ---------------- */
   var rafLast = 0;
   function frame(t) {
-    if (st.running && !(auto.on && auto.waiting)) {
+    if (st.running && !(auto.on && auto.waiting) && !(following() && mir.wpm === 0)) {
       var dt = rafLast ? Math.min(0.1, (t - rafLast) / 1000) : 0;
       var limit = maxPos();
       var speed = wpm() / 60 * st.pxPerWord;
-      if (auto.on && auto.source === 'voz') {
+      if (auto.on) {
         var k = voiceTracked() ? st.serverPos : auto.localPos;
         if (!st.off && k != null) {
           var target = Math.min(limit, yOfWord(k) - lineY());
@@ -378,23 +378,18 @@
   }
 
   function autoTick() {
-    if (!auto.on || !st.running || !auto.source) return;
-    if (auto.source === 'tempo') {
-      var target = P.wpmForTime(scriptWords.length - wordAtLine(), script.durationSec - st.elapsedMs / 1000);
-      auto.wpm += (target - auto.wpm) * 0.3;
-    } else {
-      var now = Date.now();
-      auto.waiting = now - auto.lastWord > 3000 || st.off || (voiceTracked() && !auto.serverReading);
-      var base = voiceTracked() ? auto.serverWpm : P.spokenWpm(auto.times, now);
-      if (!st.off && base) auto.wpm += (P.clamp(base) - auto.wpm) * 0.4;
-    }
+    if (!auto.on || !st.running || auto.source !== 'voz') return;
+    var now = Date.now();
+    auto.waiting = now - auto.lastWord > 3000 || st.off || (voiceTracked() ? !auto.serverReading : !auto.localReading);
+    var base = voiceTracked() ? auto.serverWpm : P.spokenWpm(auto.times, now);
+    if (!auto.waiting && base) auto.wpm += (P.clamp(base) - auto.wpm) * 0.4;
     renderSpeed();
   }
 
   function startAuto() {
     if (!auto.on || !st.running) return;
-    if (auto.source === 'tempo' || auto.rec || auto.cloud) return;
-    if (GF.net.online() && (canCloud() || (SR && !auto.voiceFailed))) startVoice(); else useTime();
+    if (auto.source === 'indisponivel' || auto.rec || auto.cloud) return;
+    if (GF.net.online() && (canCloud() || (SR && !auto.voiceFailed))) startVoice(); else voiceUnavailable();
   }
   /* Voz pela API Deepgram, através do backend (a chave fica no servidor). */
   function canCloud() {
@@ -407,6 +402,7 @@
     auto.missedWords = 0;
     auto.missedSince = null;
     auto.localPos = null;
+    auto.localReading = false;
     auto.serverWpm = null;
     auto.serverReading = false;
     auto.waiting = false;
@@ -416,7 +412,7 @@
   function startVoice() {
     if (canCloud()) return startCloud();
     if (SR && !auto.voiceFailed) return startBrowserVoice();
-    useTime();
+    voiceUnavailable();
   }
   function startCloud() {
     var c = {}; auto.cloud = c; auto.source = 'voz'; auto.engine = 'deepgram'; resetHeard();
@@ -434,7 +430,7 @@
     }, function () {
       if (auto.cloud !== c) return;
       auto.cloud = null; auto.cloudFailed = true; auto.voiceFailed = true;
-      useTime('Microfone indisponível. A velocidade segue o tempo previsto.');
+      voiceUnavailable('Microfone indisponível. A rolagem automática ficou em espera.');
     });
     renderSpeed();
   }
@@ -475,13 +471,15 @@
 
     var from = auto.localPos == null ? wordAtLine() : auto.localPos;
     var k = P.locate(scriptWords, heard, from, st.arming ? 40 : 140);
-    if (k > from && (!st.off || isFinal)) {
+    auto.localReading = k >= from && (!st.off || (isFinal && k > from));
+    auto.waiting = !auto.localReading;
+    renderSpeed();
+    if (auto.localReading) {
       auto.localPos = k;
-      auto.waiting = false;
       auto.missedWords = 0;
       auto.missedSince = null;
       setOffScript(false, null);
-      if (st.arming) readingStarted(k);
+      if (st.arming && k > from) readingStarted(k);
     } else if (isFinal && st.running && auto.on && !st.off) {
       auto.missedWords += ws.length;
       if (auto.missedSince === null) auto.missedSince = now;
@@ -493,7 +491,7 @@
   /* Voz pelo reconhecimento do próprio navegador (sem chave da Deepgram ou como reserva). */
   function startBrowserVoice() {
     var r;
-    try { r = new SR(); } catch (e) { return useTime(); }
+    try { r = new SR(); } catch (e) { return voiceUnavailable(); }
     r.lang = 'pt-BR'; r.continuous = true; r.interimResults = true;
     r.onresult = function (e) {
       if (auto.rec !== r) return;
@@ -513,35 +511,36 @@
     r.onerror = function (e) {
       if (e.error === 'no-speech' || e.error === 'aborted') return;
       auto.voiceFailed = true;
-      useTime(e.error === 'network' ? 'Sem conexão para reconhecer a fala. A velocidade segue o tempo previsto.'
-        : 'Microfone indisponível. A velocidade segue o tempo previsto.');
+      voiceUnavailable(e.error === 'network' ? 'Sem conexão para reconhecer a fala. A rolagem automática ficou em espera.'
+        : 'Microfone indisponível. A rolagem automática ficou em espera.');
     };
     r.onend = function () { if (auto.rec === r && ((auto.on && st.running) || st.arming)) { try { r.start(); } catch (err) { /* reinício já em curso */ } } };
     auto.rec = r; auto.source = 'voz'; auto.engine = 'navegador'; resetHeard();
     if (live) live.send({ type: 'speech:start', engine: 'browser' });
-    try { r.start(); } catch (e) { auto.rec = null; useTime(); }
+    try { r.start(); } catch (e) { auto.rec = null; voiceUnavailable(); }
     renderSpeed();
   }
   function stopVoice() {
     var r = auto.rec; auto.rec = null;
     if (r) { try { r.stop(); } catch (e) { /* noop */ } }
     stopCloud();
-    if (auto.source === 'voz') auto.source = null;
+    auto.source = null;
     auto.engine = null;
     resetHeard();
   }
-  function useTime(msg) {
+  function voiceUnavailable(msg) {
     if (st.arming) { // não dá para ouvir: volta ao início manual
       disarm();
       ui.toast('Não foi possível ouvir o microfone. Aperte Iniciar para começar.', 'warn', 4500);
       return;
     }
-    if (msg) st.voiceLost = true; // a voz caiu: avisar quando voltar
+    st.voiceLost = true; // a voz caiu: avisar quando voltar
     var r = auto.rec; auto.rec = null;
     if (r) { try { r.abort(); } catch (e) { /* noop */ } }
     stopCloud();
-    auto.source = 'tempo'; auto.engine = null; resetHeard();
-    if (msg) ui.toast(msg, 'info', 4000);
+    auto.source = 'indisponivel'; auto.engine = null; resetHeard();
+    auto.waiting = true;
+    ui.toast((msg || 'Reconhecimento de voz indisponível.') + ' Desligue Auto para rolar no manual.', 'info', 5000);
     renderSpeed();
   }
   function setAuto(on) {
@@ -554,9 +553,14 @@
     var b = ui.$('#c-auto'); if (!b) return;
     b.setAttribute('aria-pressed', String(auto.on));
     b.classList.toggle('is-on', auto.on);
-    var label = !auto.on ? '' : auto.source === 'voz' ? (st.off ? 'Auto · fora do roteiro' : auto.waiting ? 'Auto · aguardando fala' : 'Auto · voz') : auto.source === 'tempo' ? 'Auto · tempo' : 'Auto';
-    ui.$('#c-speed').textContent = auto.on ? (auto.source ? Math.round(auto.wpm) : '–') : prefs.speed;
-    ui.$('#c-wpm').textContent = auto.on ? (auto.source === 'voz' ? 'voz' : auto.source === 'tempo' ? 'tempo' : 'auto') : manualWpm() + ' ppm';
+    var heardRecently = Date.now() - auto.lastWord <= 3000;
+    var aligned = voiceTracked() ? auto.serverReading : auto.localReading;
+    var voiceStatus = st.off || (heardRecently && !aligned) ? 'fora do roteiro'
+      : auto.waiting ? 'aguardando fala' : 'voz';
+    var label = !auto.on ? '' : auto.source === 'voz' ? 'Auto · ' + voiceStatus
+      : auto.source === 'indisponivel' ? 'Auto · voz indisponível' : 'Auto';
+    ui.$('#c-speed').textContent = auto.on ? (auto.source === 'voz' ? Math.round(auto.wpm) : '–') : prefs.speed;
+    ui.$('#c-wpm').textContent = auto.on ? (auto.source === 'voz' ? 'voz' : 'auto') : manualWpm() + ' ppm';
     var ta = ui.$('#t-auto'); ta.hidden = !auto.on; ta.textContent = label;
   }
 
@@ -884,7 +888,7 @@
   }
   function onMirrorState(m) {
     if (!following() || (m.from && m.from !== mir.controller.id)) return;
-    mir.last = Date.now(); mir.wpm = m.wpm || null;
+    mir.last = Date.now(); mir.wpm = m.wpm == null ? null : m.wpm;
     if (mir.lost) { mir.lost = false; renderMirror(); }
     st.started = !!m.started; st.startedAt = m.startedAt || st.startedAt; st.elapsedMs = m.elapsedMs || 0;
     if (st.running !== !!m.running) { st.running = !!m.running; st.lastTick = performance.now(); renderPlay(); }
@@ -899,7 +903,7 @@
     if (controlling()) {
       if (mir.dirty || now - mir.lastSent > (st.running ? 250 : 1000)) {
         mir.dirty = false; mir.lastSent = now;
-        mirSend({ type: 'mirror:state', pos: Math.round(wordPos() * 100) / 100, running: st.running, wpm: wpm(), elapsedMs: Math.round(st.elapsedMs), started: st.started, startedAt: st.startedAt });
+        mirSend({ type: 'mirror:state', pos: Math.round(wordPos() * 100) / 100, running: st.running, wpm: auto.on && (auto.waiting || auto.source !== 'voz') ? 0 : wpm(), elapsedMs: Math.round(st.elapsedMs), started: st.started, startedAt: st.startedAt });
       }
     } else if (following() && !mir.lost && now - mir.last > 3000) {
       mir.lost = true; renderMirror(); renderPlay(); // a principal parou de mandar a posição (travou ou caiu)
@@ -971,7 +975,10 @@
     var behind = m.behind || [], cut = m.cutPlan && m.cutPlan.tight ? m.cutPlan : null;
     var railChanged = marked || JSON.stringify(behind) !== JSON.stringify(st.behind) || JSON.stringify(cut) !== JSON.stringify(st.cut);
     st.behind = behind; st.cut = cut;
-    if (voiceTracked()) setOffScript(!!m.offScript, m.offScript ? m.bridge : null);
+    if (voiceTracked()) {
+      setOffScript(!!m.offScript, m.offScript ? m.bridge : null);
+      renderSpeed();
+    }
     if (marked) { refreshAnchorMarks(); persist(); }
     if (railChanged) renderRail();
   }
@@ -991,7 +998,7 @@
     // no manual (rolando ou pausado), só avisa: quem decide religar é o operador
     if (!auto.on) { if (st.started) ui.toast('A voz voltou. Você continua no manual; aperte Auto para ela guiar de novo.', 'info', 6000); return; }
     if (!st.running) return;
-    if (auto.source === 'tempo') { auto.source = null; startAuto(); ui.toast('A voz voltou: a rolagem segue a fala de novo.', 'ok', 3000); }
+    if (auto.source === 'indisponivel') { auto.source = null; startAuto(); }
   }
   window.addEventListener('offline', function () { if (auto.on && auto.source === 'voz') st.voiceLost = true; });
   window.addEventListener('online', voiceBack);

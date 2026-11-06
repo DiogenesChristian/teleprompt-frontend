@@ -96,7 +96,7 @@
     }
     var k = pass(function (a, b) { return a === b; });
     if (k < 0) k = pass(near);
-    if (k < 0) {
+    if (k < 0 && !STOP[tail[tail.length - 1]]) {
       for (var size = Math.min(8, spoken.length); size >= 3; size--) {
         var candidate = locateLoose(scriptWords, spoken.slice(-size), start, end);
         if (candidate >= fromIdx) { k = candidate; break; }
