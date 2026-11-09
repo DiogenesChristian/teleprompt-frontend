@@ -67,3 +67,13 @@ Registre por execução: navegador e versão, microfone, motor usado, ritmo, atr
 ## Entrega
 
 Use as alterações do backend e do frontend em conjunto. Consulte o histórico de cada repositório para identificar os commits desta melhoria.
+
+## Saúde do microfone (Deepgram e navegador)
+
+Os dois modos monitoram a entrada de áudio: após oito segundos abaixo do limiar RMS de 0,002, exibem “microfone sem sinal”. O aviso some quando o sinal retorna. Eventos de interrupção da captação e desconexão também são tratados; permissão negada tem uma mensagem própria. `no-speech` sozinho não indica falha do microfone.
+
+No reconhecimento nativo, o monitor usa a entrada padrão do sistema, pois a API de reconhecimento não utiliza a seleção de dispositivo feita para o Deepgram. O monitor abre uma captura local adicional, liberada ao pausar, desligar Auto ou perder a voz. Resultados de permissão recebidos após o cancelamento são descartados e a captura é encerrada.
+
+Silêncio, voz muito baixa e microfone no mudo podem produzir o mesmo aviso: não é possível saber se alguém está falando quando não há captação. Sem getUserMedia, o reconhecimento nativo continua sem o monitor adicional; sem AudioContext, só os eventos da faixa ficam disponíveis. Um AudioContext suspenso não conta como silêncio. HTTPS/localhost e permissões do navegador são necessários para a captura. O comportamento com hardware real e a captura simultânea variam por navegador e ainda precisam de validação manual.
+
+Testes automatizados: `npm test`, com APIs de áudio simuladas; não substituem teste com microfone físico.
