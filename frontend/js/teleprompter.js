@@ -339,7 +339,7 @@
   /* ---------------- velocidade automática ---------------- */
   var P = GF.pace;
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  var auto = { on: !!prefs.autoSpeed, source: null, engine: null, wpm: 150, rec: null, cloud: null, times: [], spoken: [], lastWord: 0, waiting: false, voiceFailed: false, cloudFailed: false };
+  var auto = { on: !!prefs.autoSpeed, source: null, engine: null, wpm: 150, rec: null, cloud: null, mic: null, times: [], spoken: [], lastWord: 0, waiting: false, voiceFailed: false, cloudFailed: false };
   var scriptWords = [], blockStart = [];
 
   function indexWords() {
@@ -417,7 +417,7 @@
   function startCloud() {
     var c = {}; auto.cloud = c; auto.source = 'voz'; auto.engine = 'deepgram'; resetHeard();
     navigator.mediaDevices.getUserMedia({ audio: micConstraints() }).catch(function (err) {
-      if (!prefs.micId) throw err;
+      if (!prefs.micId || ['NotFoundError', 'OverconstrainedError'].indexOf(err.name) < 0) throw err;
       return navigator.mediaDevices.getUserMedia({ audio: micConstraints(true) }); // microfone escolhido sumiu: usa o padrão
     }).then(function (stream) {
       if (auto.cloud !== c) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
@@ -428,10 +428,10 @@
       live.send({ type: 'speech:start', engine: 'deepgram', mimeType: rec.mimeType });
       rec.ondataavailable = function (e) { if (e.data && e.data.size && auto.cloud === c) live.send(e.data); };
       rec.start(250); // envia um pedaço de áudio a cada 250 ms
-    }, function () {
+    }, function (err) {
       if (auto.cloud !== c) return;
       auto.cloud = null; auto.cloudFailed = true; auto.voiceFailed = true;
-      voiceUnavailable('Microfone indisponível. A rolagem automática ficou em espera.');
+      voiceUnavailable(micErrorMessage(err && err.name));
     });
     renderSpeed();
   }
@@ -450,30 +450,50 @@
       }).join('');
     }, function () { sel.disabled = true; });
   }
+  function micErrorMessage(code) {
+    if (['NotAllowedError', 'SecurityError', 'not-allowed', 'service-not-allowed'].indexOf(code) >= 0)
+      return 'Permissão de microfone negada. Confira as permissões do navegador.';
+    if (['NotFoundError', 'DevicesNotFoundError', 'audio-capture'].indexOf(code) >= 0)
+      return 'Microfone desconectado ou não encontrado. Confira a entrada de áudio.';
+    return 'Microfone indisponível. Confira a entrada de áudio.';
+  }
+  function micActive(c) { return auto.cloud === c || auto.mic === c; }
+  function stopMic(c) {
+    if (!c) return;
+    clearInterval(c.micTimer);
+    if (c.audio && c.audio.state !== 'closed') c.audio.close().catch(function () {});
+    if (c.stream) c.stream.getTracks().forEach(function (t) { t.stop(); });
+  }
   function monitorMic(c) {
     var track = c.stream.getAudioTracks()[0];
     if (!track) return;
     function report(warning) {
-      if (auto.cloud !== c || !!c.micWarning === warning) return;
+      if (!micActive(c) || !!c.micWarning === warning) return;
       c.micWarning = warning;
-      if (warning) ui.toast('Microfone sem sinal. Confira se ele está no mudo.', 'warn', 5000);
+      if (warning) ui.toast('Sem sinal de áudio há alguns segundos. Confira o microfone e se ele está no mudo.', 'warn', 5000);
       renderSpeed();
     }
     track.addEventListener('ended', function () {
-      if (auto.cloud === c) voiceUnavailable('Microfone desconectado. Confira a entrada de áudio.');
+      if (micActive(c)) voiceUnavailable('Microfone desconectado. Confira a entrada de áudio.');
     });
     track.addEventListener('mute', function () { report(true); });
-    track.addEventListener('unmute', function () { report(false); });
+    track.addEventListener('unmute', function () { lastSignal = Date.now(); report(false); });
+    var lastSignal = Date.now();
+    if (track.readyState === 'ended') { voiceUnavailable('Microfone desconectado. Confira a entrada de áudio.'); return; }
+    if (track.muted) report(true);
     var Audio = window.AudioContext || window.webkitAudioContext;
     if (!Audio) return;
     try {
       c.audio = new Audio();
+      if (c.audio.state === 'suspended' && c.audio.resume) c.audio.resume().catch(function () {});
       var meter = c.audio.createAnalyser();
       c.audio.createMediaStreamSource(c.stream).connect(meter);
       var samples = new Float32Array(meter.fftSize);
-      var lastSignal = Date.now();
+      lastSignal = Date.now();
       c.micTimer = setInterval(function () {
-        if (track.muted || c.audio.state !== 'running') return;
+        if (!micActive(c)) return;
+        if (c.audio.state !== 'running') { lastSignal = Date.now(); return; }
+        if (track.muted) return;
         meter.getFloatTimeDomainData(samples);
         var power = samples.reduce(function (sum, value) { return sum + value * value; }, 0);
         var now = Date.now();
@@ -489,10 +509,8 @@
   function stopCloud() {
     var c = auto.cloud; auto.cloud = null;
     if (!c) return;
-    clearInterval(c.micTimer);
-    if (c.audio && c.audio.state !== 'closed') c.audio.close().catch(function () {});
+    stopMic(c);
     try { if (c.rec && c.rec.state !== 'inactive') c.rec.stop(); } catch (e) { /* noop */ }
-    if (c.stream) c.stream.getTracks().forEach(function (t) { t.stop(); });
     if (live) live.send({ type: 'speech:stop' });
   }
   /* Texto reconhecido (navegador ou Deepgram) → ritmo e posição da fala. */
@@ -548,20 +566,34 @@
       }
     };
     r.onerror = function (e) {
+      if (auto.rec !== r) return;
       if (e.error === 'no-speech' || e.error === 'aborted') return;
       auto.voiceFailed = true;
       voiceUnavailable(e.error === 'network' ? 'Sem conexão para reconhecer a fala. A rolagem automática ficou em espera.'
-        : 'Microfone indisponível. A rolagem automática ficou em espera.');
+        : micErrorMessage(e.error));
     };
     r.onend = function () { if (auto.rec === r && ((auto.on && st.running) || st.arming)) { try { r.start(); } catch (err) { /* reinício já em curso */ } } };
     auto.rec = r; auto.source = 'voz'; auto.engine = 'navegador'; resetHeard();
     if (live) live.send({ type: 'speech:start', engine: 'browser' });
-    try { r.start(); } catch (e) { auto.rec = null; voiceUnavailable(); }
+    // Native recognition uses the default input, not the Deepgram device preference.
+    var c = {}; auto.mic = c;
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ audio: micConstraints(true) }).then(function (stream) {
+        if (auto.mic !== c || auto.rec !== r) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+        c.stream = stream; monitorMic(c);
+      }, function (err) {
+        if (auto.mic !== c || auto.rec !== r) return;
+        auto.voiceFailed = true;
+        voiceUnavailable(micErrorMessage(err && err.name));
+      });
+    }
+    try { r.start(); } catch (e) { voiceUnavailable(micErrorMessage(e.name)); }
     renderSpeed();
   }
   function stopVoice() {
     var r = auto.rec; auto.rec = null;
     if (r) { try { r.stop(); } catch (e) { /* noop */ } }
+    var mic = auto.mic; auto.mic = null; stopMic(mic);
     stopCloud();
     auto.source = null;
     auto.engine = null;
@@ -570,12 +602,13 @@
   function voiceUnavailable(msg) {
     if (st.arming) { // não dá para ouvir: volta ao início manual
       disarm();
-      ui.toast('Não foi possível ouvir o microfone. Aperte Iniciar para começar.', 'warn', 4500);
+      ui.toast((msg ? msg + ' ' : '') + 'Não foi possível ouvir o microfone. Aperte Iniciar para começar.', 'warn', 4500);
       return;
     }
     st.voiceLost = true; // a voz caiu: avisar quando voltar
     var r = auto.rec; auto.rec = null;
     if (r) { try { r.abort(); } catch (e) { /* noop */ } }
+    var mic = auto.mic; auto.mic = null; stopMic(mic);
     stopCloud();
     auto.source = 'indisponivel'; auto.engine = null; resetHeard();
     auto.waiting = true;
@@ -594,7 +627,7 @@
     b.classList.toggle('is-on', auto.on);
     var heardRecently = Date.now() - auto.lastWord <= 3000;
     var aligned = voiceTracked() ? auto.serverReading : auto.localReading;
-    var voiceStatus = auto.cloud && auto.cloud.micWarning ? 'microfone sem sinal'
+    var voiceStatus = ((auto.cloud && auto.cloud.micWarning) || (auto.mic && auto.mic.micWarning)) ? 'microfone sem sinal'
       : st.off || (heardRecently && !aligned) ? 'fora do roteiro'
       : auto.waiting ? 'aguardando fala' : 'voz';
     var label = !auto.on ? '' : auto.source === 'voz' ? 'Auto · ' + voiceStatus
