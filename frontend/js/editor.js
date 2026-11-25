@@ -27,6 +27,7 @@
     '<div class="ed-head">' +
       '<div class="ed-top"><a class="back" href="index.html">' + icon('chevron-left', { size: 16 }) + 'Roteiros</a>' +
         '<div class="actions" style="align-items:center"><span class="save-state" id="save-state" role="status"></span>' +
+          '<button type="button" class="btn btn-sm" id="btn-conflict-drafts" hidden>Baixar rascunhos de conflito</button>' +
           '<button type="button" class="icon-btn" id="btn-history" title="Alterações" aria-label="Alterações">' + icon('history', { size: 18 }) + '</button>' +
           '<button type="button" class="btn btn-primary" id="btn-studio">' + icon('monitor-play', { size: 16 }) + '<span id="studio-label">Transmissão</span></button></div></div>' +
       '<label class="ed-label" for="f-title">Título principal</label>' +
@@ -62,6 +63,10 @@
    * para de digitar. Com o teleprompter aberto em outra tela, a mudança aparece
    * lá na hora (mesmo navegador: evento "storage"; outro computador: backend). */
   var AUTOSAVE_MS = 700, autoTimer = null;
+  function editableFields(s) {
+    return JSON.stringify([s.title, s.program, s.presenter, s.durationSec, s.scheduledAt, s.blocks, s.anchors, s.covers || []]);
+  }
+  var lastSaved = editableFields(script);
   function markDirty(content) {
     st.dirty = true; if (content) st.contentChanged = true; renderSaveState();
     clearTimeout(autoTimer);
@@ -73,6 +78,9 @@
     el.textContent = st.dirty ? 'Salvando…' : 'Salvo às ' + U.time(script.updatedAt);
   }
   function save(silent) {
+    var cached = S.getScript(script.id);
+    if (cached && editableFields(cached) !== lastSaved) { refreshFromStore(); return; }
+    if (cached) script.syncedAt = cached.syncedAt;
     // Sem backend, a regra é local. Com backend, quem decide é o servidor (evento gf:status abaixo).
     if (script.status === 'aprovado' && st.contentChanged && !GF.api.sync.enabled()) {
       S.addRevision(script, { kind: 'edicao', blockId: null, before: '', after: '', note: 'Texto alterado depois da aprovação; roteiro voltou para revisão.' });
@@ -81,6 +89,7 @@
     }
     clearTimeout(autoTimer);
     S.saveScript(script);
+    lastSaved = editableFields(script);
     st.dirty = false; st.contentChanged = false;
     renderSaveState(); renderApproval();
     if (!silent) ui.toast('Roteiro salvo.', 'ok', 1800);
@@ -481,9 +490,28 @@
   ui.$('#btn-studio').addEventListener('click', function () { if (st.dirty) save(true); location.href = 'teleprompter.html?id=' + script.id; });
   document.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); } });
   window.addEventListener('pagehide', function () { if (st.dirty) save(true); });
-  // Outra aba (ex.: painel de edição do teleprompter) salvou este roteiro: atualiza aqui se não houver nada pendente.
-  window.addEventListener('storage', function (e) { if (e.key === 'globoflow:scripts') refreshFromStore(false); });
-  window.addEventListener('gf:synced', function () { refreshFromStore(false); }); // veio do servidor
+  function renderConflictDrafts() {
+    ui.$('#btn-conflict-drafts').hidden = !S.getConflictDrafts(script.id).length;
+  }
+  ui.$('#btn-conflict-drafts').addEventListener('click', function () {
+    var url = URL.createObjectURL(new Blob([JSON.stringify(S.getConflictDrafts(script.id), null, 2)], { type: 'application/json' }));
+    var link = document.createElement('a');
+    link.href = url; link.download = 'rascunhos-' + script.id + '.json'; link.click();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  });
+  window.addEventListener('gf:store', function (e) {
+    if (e.detail.key === 'conflict-drafts:' + script.id) renderConflictDrafts();
+  });
+  window.addEventListener('storage', function (e) {
+    if (e.key === 'globoflow:scripts') refreshFromStore();
+    if (e.key === 'globoflow:conflict-drafts:' + script.id) renderConflictDrafts();
+  });
+  window.addEventListener('gf:synced', function (e) {
+    if (!e.detail || !e.detail.id || e.detail.id === script.id) refreshFromStore();
+  });
+  if (GF.api.sync.enabled()) {
+    GF.api.live(script.id).on('script:updated', function (m) { GF.api.sync.receiveScript(m.script); });
+  }
   /* Aprovação decidida pelo servidor depois de salvar. */
   window.addEventListener('gf:status', function (e) {
     var d = e.detail || {}; if (d.id !== script.id) return;
@@ -500,14 +528,34 @@
     lockInputs();
   });
   function lockInputs() { ui.$$('#main input, #main textarea, #main select').forEach(function (x) { x.disabled = true; }); ui.$('#btn-add').disabled = true; }
-  function refreshFromStore(force) {
-    if (st.dirty && !force) return;
+  function refreshFromStore() {
     var fresh = S.getScript(script.id); if (!fresh) return;
-    var sig = function (x) { return JSON.stringify([x.title, x.blocks, x.anchors, x.covers || [], x.status]); };
-    if (sig(fresh) === sig(script)) return;
+    var sameFields = lastSaved === editableFields(fresh);
+    if (st.dirty && sameFields) {
+      // Uma confirmação da nossa gravação muda os timestamps, mas não o conteúdo salvo.
+      script.syncedAt = fresh.syncedAt;
+      return;
+    }
+    if (st.dirty) {
+      S.preserveConflictDraft(script);
+      clearTimeout(autoTimer);
+      st.dirty = false; st.contentChanged = false;
+      ui.toast('O roteiro mudou em outra tela. Sua edição ficou nos rascunhos de conflito.', 'warn', 4500);
+    }
+    if (sameFields && script.status === fresh.status && script.approvedBy === fresh.approvedBy &&
+        script.approvedAt === fresh.approvedAt && !st.locked) {
+      script = fresh;
+      renderSaveState();
+      return;
+    }
+    lastSaved = editableFields(fresh);
     var a = document.activeElement, aid = a && a.id, s0 = a && a.selectionStart, s1 = a && a.selectionEnd;
     script = fresh;
     ui.$('#f-title').value = script.title;
+    ui.$('#f-program').value = script.program || '';
+    ui.$('#f-presenter').value = script.presenter || '';
+    ui.$('#f-dur').value = U.clock(script.durationSec);
+    ui.$('#f-when').value = toLocalInput(script.scheduledAt);
     renderBlocks(); renderSaveState(); renderApproval();
     if (st.mode === 'preview') renderPreview();
     var back = aid && document.getElementById(aid);
@@ -518,6 +566,7 @@
 
   renderBlocks();
   renderStudioBtn();
+  renderConflictDrafts();
   renderSaveState();
   renderApproval();
   renderAI();

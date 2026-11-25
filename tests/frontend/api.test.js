@@ -29,7 +29,7 @@ function loadApi({ config = {}, online = true, fetchImpl } = {}) {
 const hangingFetch = (_url, opts) => new Promise((_res, rej) => {
   opts.signal.addEventListener('abort', () => rej(Object.assign(new Error('abort'), { name: 'AbortError' })));
 });
-const jsonResponse = (status, body) => Promise.resolve({ ok: status >= 200 && status < 300, status, json: () => Promise.resolve(body) });
+const jsonResponse = (status, body) => Promise.resolve({ ok: status >= 200 && status < 300, status, json: () => Promise.resolve(body), text: () => Promise.resolve(JSON.stringify(body)) });
 
 const script = () => ({
   id: 'r1',
@@ -210,3 +210,58 @@ test('sincronização preserva uma edição offline baseada na versão do servid
   assert.equal(store.getScript(remote.id).title, 'Edição offline');
   assert.equal((await uploaded).title, 'Edição offline');
 });
+
+test('conflito HTTP preserva a edição enviada e a que chegou durante a gravação', async () => {
+  let respond, requestStarted;
+  const started = new Promise((resolve) => { requestStarted = resolve; });
+  const api = loadApi({ fetchImpl: () => { requestStarted(); return new Promise((resolve) => { respond = resolve; }); } });
+  const store = loadStore();
+  const local = Object.assign(script(), { syncedAt: 100 });
+  store.saveScript(local);
+  await started;
+
+  const newer = store.getScript(local.id);
+  newer.blocks[0].text = 'Mais texto digitado durante o envio.';
+  store.saveScript(newer);
+  const remote = Object.assign(script(), { updatedAt: 200 });
+  remote.blocks[0].text = 'Edição de outra pessoa.';
+  const synced = new Promise((resolve) => window.addEventListener('gf:synced', resolve, { once: true }));
+  respond(await jsonResponse(409, { error: 'Conflito', script: remote }));
+  await synced;
+
+  assert.deepEqual(store.getConflictDrafts(local.id), [local, newer]);
+  assert.deepEqual(store.getScript(local.id), { ...remote, syncedAt: 200 });
+  assert.equal(store.getScripts().length, 1);
+});
+
+test('evento de âncora incorpora os metadados e preserva o roteiro local pendente', () => {
+  const api = loadApi();
+  const store = loadStore();
+  const local = Object.assign(script(), { updatedAt: 90, syncedAt: 80 });
+  local.blocks[0].text = 'Texto local pendente.';
+  store.putScript(local);
+
+  const remote = Object.assign(script(), { updatedAt: 85 });
+  Object.assign(remote.anchors[0], { label: 'Orçamento', priority: 'cortável' });
+  api.sync.receiveScript(remote);
+  api.sync.receiveScript(remote);
+  api.sync.receiveScript({ ...remote, updatedAt: 84 });
+
+  assert.deepEqual(store.getConflictDrafts(local.id), [local]);
+  assert.deepEqual(store.getScript(local.id), { ...remote, syncedAt: 85 });
+});
+
+function loadStore() {
+  const file = require.resolve('../../frontend/js/store.js');
+  const values = new Map();
+  const events = new EventTarget();
+  Object.assign(window, {
+    localStorage: { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) },
+    dispatchEvent: events.dispatchEvent.bind(events),
+    addEventListener: events.addEventListener.bind(events)
+  });
+  delete require.cache[file];
+  require(file);
+  window.GF.store.setUser({ id: 'editor-local', token: 'teste' });
+  return window.GF.store;
+}
