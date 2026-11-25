@@ -1106,9 +1106,7 @@
       resetHeard();
     });
     live.on('script:updated', function (m) {
-      var fresh = Object.assign({}, m.script, { syncedAt: m.script.updatedAt });
-      S.putScript(fresh);
-      applyFresh(S.getScript(script.id) || fresh, m.by);
+      GF.api.sync.receiveScript(m.script, null, m.by);
     });
   }
 
@@ -1123,7 +1121,7 @@
   // Assinatura da estrutura: título principal, ordem, títulos e duração dos tópicos, âncoras.
   function structSig(s) {
     return s.title + '§' + s.blocks.map(function (b) { return b.id + '|' + b.title + '|' + b.durationSec; }).join('§') +
-      '§' + s.anchors.map(function (a) { return a.id + '|' + a.text; }).join(',') +
+      '§' + JSON.stringify(s.anchors.map(function (a) { return [a.id, a.blockId, a.text, a.label, a.type, a.priority]; })) +
       '§' + (s.covers || []).map(function (c) { return c.blockId + '|' + c.text; }).join(',');
   }
   /* Aplica uma versão nova do roteiro sem reiniciar o teleprompter: tempo,
@@ -1135,7 +1133,7 @@
       if (!ob || ob.text !== nb.text || ob.title !== nb.title) changedBlocks.push({ id: nb.id, parts: !ob || ob.text !== nb.text ? newParts(ob ? ob.text : '', nb.text) : [] });
     });
     var structural = structSig(fresh) !== structSig(script);
-    if (!changedBlocks.length && !structural) return false;
+    if (!changedBlocks.length && !structural) { script = fresh; return false; }
     fresh.anchors.forEach(function (a) { if (!st.anchors[a.id]) st.anchors[a.id] = 'pendente'; });
     script = fresh;
     changedBlocks.forEach(function (c) {
@@ -1221,7 +1219,7 @@
         '<button type="button" class="icon-btn" data-le="close" aria-label="Fechar edição">' + icon('x', { size: 18 }) + '</button></div>' +
       '<div class="le-body" id="le-body">' +
         '<div class="notice notice-warn le-conflict" id="le-conflict"' + (ed.conflict ? '' : ' hidden') + '>' + icon('triangle-alert', { size: 16 }) +
-          '<span>O roteiro mudou em outro lugar. ' +
+          '<span>O roteiro mudou em outro lugar. Uma cópia da sua edição ficará disponível no editor. ' +
           '<button type="button" class="link" data-le="reload">Carregar a versão nova</button></span></div>' +
         '<div class="field"><label for="le-title">Título principal</label><input class="input le-main" id="le-title" value="' + U.esc(d.title) + '"></div>' +
         '<div class="le-topics" id="le-topics">' + d.blocks.map(edTopicHTML).join('') + '</div>' +
@@ -1294,7 +1292,11 @@
     }
   });
   /* Versão nova vinda do servidor (conflito, edição recusada, sincronização). */
-  window.addEventListener('gf:synced', function () { var fresh = S.getScript(script.id); if (fresh) applyFresh(fresh); });
+  window.addEventListener('gf:synced', function (e) {
+    var detail = e.detail || {};
+    if (detail.id && detail.id !== script.id) return;
+    var fresh = S.getScript(script.id); if (fresh) applyFresh(fresh, detail.by);
+  });
   /* Aprovação decidida pelo servidor depois de salvar. */
   window.addEventListener('gf:status', function (e) {
     var d = e.detail || {}; if (d.id !== script.id) return;
@@ -1304,7 +1306,8 @@
   });
   function closeEdit(force) {
     if (!ed.open) return;
-    if (ed.dirty) saveEdit(); // aplica o que ainda estava esperando
+    if (ed.dirty && !ed.conflict) saveEdit(); // aplica o que ainda estava esperando
+    if (ed.dirty && ed.conflict) S.preserveConflictDraft(ed.draft);
     ed.open = false; ed.draft = null; ed.dirty = false;
     relayout(function () { edEl.hidden = true; el.body.classList.remove('is-editing'); });
     edEl.innerHTML = '';
@@ -1325,15 +1328,17 @@
       return;
     }
     ed.conflict = true;
+    clearTimeout(liveTimer);
     var c = ui.$('#le-conflict', edEl); if (c) c.hidden = false;
   }
   function saveEdit() {
     clearTimeout(liveTimer);
-    if (!ed.open || !ed.dirty || ed.denied) return;
+    if (!ed.open || !ed.dirty || ed.denied || ed.conflict) return;
+    var latest = S.getScript(script.id) || script;
+    if (applyFresh(latest) && ed.conflict) return;
     var d = ed.draft;
     if (!d.title.trim()) { ed.dirty = false; renderEditState(); return; } // espera ter um título principal
     var contentSig = function (s) { return s.blocks.map(function (b) { return b.id + '|' + b.text; }).join('§'); };
-    var latest = S.getScript(script.id) || script;
     // Do painel vêm título, tópicos, âncoras e notas cobertas; o resto (programa, aprovação, histórico) vem da versão salva.
     var out = Object.assign(clone(latest), {
       title: d.title,
@@ -1374,6 +1379,8 @@
     var act = btn.dataset.le, d = ed.draft;
     if (act === 'close') return closeEdit();
     if (act === 'reload') {
+      if (ed.dirty) S.preserveConflictDraft(ed.draft);
+      clearTimeout(liveTimer);
       ed.draft = clone(script); ed.dirty = false; ed.conflict = false; ed.fresh = {};
       renderEdit(); return;
     }

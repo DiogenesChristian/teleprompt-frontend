@@ -164,9 +164,26 @@
     if (i >= 0) list[i] = script; else list.unshift(script);
     write('scripts', list);
   }
-  function markSynced(id, updatedAt, server) {
+  function getConflictDrafts(id) { return read('conflict-drafts:' + id, []); }
+  function preserveConflictDraft(script) {
+    var drafts = getConflictDrafts(script.id);
+    var snapshot = JSON.stringify(script);
+    if (drafts.some(function (draft) { return JSON.stringify(draft) === snapshot; })) return;
+    drafts.push(script);
+    write('conflict-drafts:' + script.id, drafts);
+  }
+  function markSynced(id, updatedAt, server, sent) {
     var list = getScripts(), s = list.filter(function (x) { return x.id === id; })[0];
     if (!s) return;
+    if (s.syncedAt != null && s.syncedAt > updatedAt) return;
+    if (sent && JSON.stringify(s) !== JSON.stringify(sent)) {
+      // A resposta confirma uma gravação anterior. Mantém a próxima edição pendente.
+      if (s.updatedAt !== s.syncedAt && s.syncedAt === sent.syncedAt) {
+        s.syncedAt = updatedAt;
+        write('scripts', list);
+      }
+      return;
+    }
     s.syncedAt = updatedAt; s.updatedAt = updatedAt; // relógio do servidor é a referência
     // aprovação: quem decide é o servidor (ex.: edição ao vivo por Jornalista / Editor mantém aprovado)
     var before = s.status, changed = false;
@@ -246,6 +263,7 @@
     init: init,
     getScripts: getScripts, getScript: getScript, saveScript: saveScript, deleteScript: deleteScript,
     createScript: createScript, blankScript: blankScript, duplicateScript: duplicateScript,
+    getConflictDrafts: getConflictDrafts, preserveConflictDraft: preserveConflictDraft,
     addRevision: addRevision, putScripts: putScripts, putScript: putScript, markSynced: markSynced, putSessions: putSessions,
     getSessions: getSessions, addSession: addSession, getActive: getActive, setActive: setActive,
     currentUser: currentUser, setUser: setUser, logout: logout,

@@ -140,6 +140,27 @@
   /* ======================= sincronização ======================= */
 
   var pending = {};
+  var sending = new Map();
+
+  function sameEdit(a, b) {
+    return ['title', 'program', 'presenter', 'durationSec', 'scheduledAt', 'blocks', 'anchors', 'covers', 'status'].every(function (key) {
+      return JSON.stringify(a[key]) === JSON.stringify(b[key]);
+    });
+  }
+  function receiveScript(server, rejected, by) {
+    var S = GF.store, id = server.id, local = S.getScript(id);
+    if (rejected) S.preserveConflictDraft(rejected);
+    if (local && local.syncedAt != null && local.syncedAt >= server.updatedAt) return;
+    var author = S.currentUser();
+    var ownEcho = !rejected && author && server.updatedById === author.id &&
+      (sending.get(id) || []).some(function (sent) { return sameEdit(sent, server); });
+    if (ownEcho && local && local.updatedAt !== local.syncedAt) return;
+    if (local && local.updatedAt !== local.syncedAt && !sameEdit(local, server)) S.preserveConflictDraft(local);
+    clearTimeout(pending[id]);
+    delete pending[id];
+    S.putScript(Object.assign({}, server, { syncedAt: server.updatedAt }));
+    fire('gf:synced', { id: id, by: by });
+  }
   function notify(msg, tone) { if (GF.ui && GF.ui.toast) GF.ui.toast(msg, tone || 'warn', 4500); }
 
   function fire(type, detail) { try { root.dispatchEvent(new CustomEvent(type, { detail: detail })); } catch (e) { /* noop */ } }
@@ -161,26 +182,33 @@
 
   var sync = {
     enabled: function () { return !!base() && !!token(); },
+    receiveScript: receiveScript,
 
     /* Envia um roteiro (com pequena espera para juntar gravações seguidas). */
     pushScript: function (script, quiet) {
       clearTimeout(pending[script.id]);
       pending[script.id] = setTimeout(function () {
         delete pending[script.id];
+        script = GF.store.getScript(script.id);
+        if (!script || script.updatedAt === script.syncedAt) return;
+        var requests = sending.get(script.id) || [];
+        sending.set(script.id, requests);
+        requests.push(script);
         call('PUT', '/api/scripts/' + encodeURIComponent(script.id), script).then(function (data) {
           // a aprovação é decidida pelo servidor (regras da edição ao vivo): a tela adota o que ele gravou
-          GF.store.markSynced(script.id, data.script.updatedAt, data.script);
+          GF.store.markSynced(script.id, data.script.updatedAt, data.script, script);
         }, function (err) {
-          // 409: outra pessoa salvou antes. O servidor devolve a versão atual; ela substitui a deste aparelho.
           if (err.status === 409 && err.data && err.data.script) {
-            GF.store.putScript(Object.assign(err.data.script, { syncedAt: err.data.script.updatedAt }));
-            try { root.dispatchEvent(new CustomEvent('gf:synced')); } catch (e) { /* noop */ }
-            notify(err.message, 'crit');
+            receiveScript(err.data.script, script);
+            notify(err.message + ' A edição local ficou nos rascunhos de conflito.', 'crit');
             return;
           }
           if (err.status === 403 && err.code === 'live-edit') return liveEditDenied(script.id, err.message, quiet);
           if (err.status === 403 && !quiet) notify(err.message + ' A alteração ficou só neste aparelho.', 'crit');
           // sem conexão: fica salvo aqui e sobe na próxima sincronização
+        }).finally(function () {
+          requests.splice(requests.indexOf(script), 1);
+          if (!requests.length) sending.delete(script.id);
         });
       }, 400);
     },
@@ -202,8 +230,15 @@
         local.forEach(function (l) {
           var s = byId[l.id];
           if (!s) { if (!l.syncedAt) { out.push(l); uploads.push(l); } return; } // apagado no servidor ou ainda não enviado
-          if ((l.updatedAt || 0) > (s.updatedAt || 0) && l.syncedAt !== l.updatedAt) { out.push(l); uploads.push(l); }
-          else out.push(Object.assign(s, { syncedAt: s.updatedAt }));
+          if (l.syncedAt != null && l.syncedAt > s.updatedAt) out.push(l);
+          else if (l.syncedAt !== l.updatedAt && (l.syncedAt === s.updatedAt || l.syncedAt == null)) {
+            out.push(l); uploads.push(l);
+          } else {
+            if (l.syncedAt !== l.updatedAt && !sameEdit(l, s)) S.preserveConflictDraft(l);
+            clearTimeout(pending[l.id]);
+            delete pending[l.id];
+            out.push(Object.assign({}, s, { syncedAt: s.updatedAt }));
+          }
           delete byId[l.id];
         });
         Object.keys(byId).forEach(function (id) { out.push(Object.assign(byId[id], { syncedAt: byId[id].updatedAt })); });
@@ -240,7 +275,9 @@
       try { ws = new WebSocket(url); } catch (e) { return retry(); }
       ws.onopen = function () {
         wait = 1000;
-        ws.send(JSON.stringify({ type: 'join', scriptId: scriptId, script: script }));
+        // O editor acompanha o roteiro sem entrar na sala da transmissão.
+        ws.send(JSON.stringify(script ? { type: 'join', scriptId: scriptId, script: script }
+          : { type: 'script:watch', scriptId: scriptId }));
       };
       ws.onmessage = function (e) {
         var msg; try { msg = JSON.parse(e.data); } catch (err) { return; }
