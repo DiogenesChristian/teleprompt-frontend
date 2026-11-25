@@ -134,14 +134,23 @@
   }
 
   /* ---------- roteiros ---------- */
-  function getScripts() { return read('scripts', []); }
+  function pendingDeletes() { return read('pendingScriptDeletes', []); }
+  function forgetDelete(id) {
+    write('pendingScriptDeletes', pendingDeletes().filter(function (x) { return x !== id; }));
+  }
+  function getScripts() {
+    var deleted = new Set(pendingDeletes());
+    return read('scripts', []).filter(function (s) { return !deleted.has(s.id); });
+  }
   function getScript(id) {
     var s = getScripts().filter(function (x) { return x.id === id; })[0];
     return s ? clone(s) : null;
   }
   function saveScript(script) {
+    if (pendingDeletes().includes(script.id)) return script;
     var list = getScripts();
-    script.updatedAt = Date.now();
+    var previous = list.find(function (s) { return s.id === script.id; });
+    script.updatedAt = Math.max(Date.now(), previous ? (previous.updatedAt || 0) + 1 : 0);
     var i = list.findIndex(function (x) { return x.id === script.id; });
     if (i >= 0) list[i] = script; else list.unshift(script);
     write('scripts', list);
@@ -149,6 +158,11 @@
     return script;
   }
   function deleteScript(id) {
+    var api = root.GF.api;
+    var deleted = pendingDeletes();
+    if (api && api.enabled() && !deleted.includes(id)) {
+      write('pendingScriptDeletes', deleted.concat(id));
+    }
     write('scripts', getScripts().filter(function (x) { return x.id !== id; }));
     sync('removeScript', id);
   }
@@ -158,15 +172,19 @@
     if (s && s.enabled()) { try { s[fn](clone(arg)); } catch (e) { /* segue local */ } }
   }
   /* Gravação vinda do servidor: não volta para o servidor. */
-  function putScripts(list) { write('scripts', list); }
+  function putScripts(list) {
+    var deleted = new Set(pendingDeletes());
+    write('scripts', list.filter(function (s) { return !deleted.has(s.id); }));
+  }
   function putScript(script) {
+    if (pendingDeletes().includes(script.id)) return;
     var list = getScripts(), i = list.findIndex(function (x) { return x.id === script.id; });
     if (i >= 0) list[i] = script; else list.unshift(script);
     write('scripts', list);
   }
-  function markSynced(id, updatedAt, server) {
+  function markSynced(id, updatedAt, server, sentAt) {
     var list = getScripts(), s = list.filter(function (x) { return x.id === id; })[0];
-    if (!s) return;
+    if (!s || (sentAt != null && s.updatedAt !== sentAt)) return;
     s.syncedAt = updatedAt; s.updatedAt = updatedAt; // relógio do servidor é a referência
     // aprovação: quem decide é o servidor (ex.: edição ao vivo por Jornalista / Editor mantém aprovado)
     var before = s.status, changed = false;
@@ -245,6 +263,7 @@
   root.GF.store = {
     init: init,
     getScripts: getScripts, getScript: getScript, saveScript: saveScript, deleteScript: deleteScript,
+    pendingDeletes: pendingDeletes, forgetDelete: forgetDelete,
     createScript: createScript, blankScript: blankScript, duplicateScript: duplicateScript,
     addRevision: addRevision, putScripts: putScripts, putScript: putScript, markSynced: markSynced, putSessions: putSessions,
     getSessions: getSessions, addSession: addSession, getActive: getActive, setActive: setActive,

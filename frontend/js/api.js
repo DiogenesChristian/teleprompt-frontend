@@ -139,7 +139,38 @@
 
   /* ======================= sincronização ======================= */
 
-  var pending = {};
+  var pending = Object.create(null);
+  var saving = Object.create(null);
+  var deleting = Object.create(null);
+  var activePulls = new Set();
+  var deleteRetry;
+  var DELETE_RETRY_MS = 5000;
+
+  function sendDelete(id) {
+    if (deleting[id]) return deleting[id];
+    if (!sync.enabled() || !isOnline()) return Promise.resolve();
+    var session = token();
+    deleting[id] = Promise.resolve(saving[id]).then(function () {
+      if (token() !== session || !isOnline() || !GF.store.pendingDeletes().includes(id)) return;
+      return call('DELETE', '/api/scripts/' + encodeURIComponent(id), undefined, {
+        signal: AbortSignal.timeout(10000)
+      }).catch(function (err) {
+        if (err.status !== 404) throw err;
+      }).then(function () {
+        // Remove any local copy written by an older tab before releasing the marker.
+        GF.store.putScripts(GF.store.getScripts());
+        GF.store.forgetDelete(id);
+      });
+    }).catch(function (err) {
+      if ((!err.status || err.status === 429 || err.status >= 500) && deleteRetry == null) {
+        deleteRetry = setTimeout(function () {
+          deleteRetry = null;
+          GF.store.pendingDeletes().forEach(sendDelete);
+        }, DELETE_RETRY_MS);
+      }
+    }).finally(function () { delete deleting[id]; });
+    return deleting[id];
+  }
   function notify(msg, tone) { if (GF.ui && GF.ui.toast) GF.ui.toast(msg, tone || 'warn', 4500); }
 
   function fire(type, detail) { try { root.dispatchEvent(new CustomEvent(type, { detail: detail })); } catch (e) { /* noop */ } }
@@ -149,10 +180,11 @@
   var deniedAt = {};
   function liveEditDenied(id, message, quiet) {
     var now = Date.now();
+    if (GF.store.pendingDeletes().includes(id)) return;
     if (!quiet && (!deniedAt[id] || now - deniedAt[id] > 30000)) notify(message + ' Sua alteração não foi gravada.', 'crit');
     deniedAt[id] = now;
     fire('gf:live-edit-denied', { id: id, message: message });
-    call('GET', '/api/scripts/' + encodeURIComponent(id)).then(function (d) {
+    return call('GET', '/api/scripts/' + encodeURIComponent(id)).then(function (d) {
       if (!d || !d.script) return;
       GF.store.putScript(Object.assign(d.script, { syncedAt: d.script.updatedAt }));
       fire('gf:synced', { id: id });
@@ -164,28 +196,38 @@
 
     /* Envia um roteiro (com pequena espera para juntar gravações seguidas). */
     pushScript: function (script, quiet) {
-      clearTimeout(pending[script.id]);
-      pending[script.id] = setTimeout(function () {
-        delete pending[script.id];
-        call('PUT', '/api/scripts/' + encodeURIComponent(script.id), script).then(function (data) {
-          // a aprovação é decidida pelo servidor (regras da edição ao vivo): a tela adota o que ele gravou
-          GF.store.markSynced(script.id, data.script.updatedAt, data.script);
-        }, function (err) {
-          // 409: outra pessoa salvou antes. O servidor devolve a versão atual; ela substitui a deste aparelho.
-          if (err.status === 409 && err.data && err.data.script) {
-            GF.store.putScript(Object.assign(err.data.script, { syncedAt: err.data.script.updatedAt }));
-            try { root.dispatchEvent(new CustomEvent('gf:synced')); } catch (e) { /* noop */ }
-            notify(err.message, 'crit');
-            return;
-          }
-          if (err.status === 403 && err.code === 'live-edit') return liveEditDenied(script.id, err.message, quiet);
-          if (err.status === 403 && !quiet) notify(err.message + ' A alteração ficou só neste aparelho.', 'crit');
-          // sem conexão: fica salvo aqui e sobe na próxima sincronização
-        });
+      var id = script.id, session = token();
+      if (!isOnline() || GF.store.pendingDeletes().includes(id)) return;
+      clearTimeout(pending[id]);
+      pending[id] = setTimeout(function () {
+        delete pending[id];
+        var request = Promise.resolve(saving[id]).then(function () {
+          if (!isOnline() || token() !== session || GF.store.pendingDeletes().includes(id)) return;
+          return call('PUT', '/api/scripts/' + encodeURIComponent(id), script).then(function (data) {
+            // a aprovação é decidida pelo servidor (regras da edição ao vivo): a tela adota o que ele gravou
+            if (token() === session) GF.store.markSynced(id, data.script.updatedAt, data.script, script.updatedAt);
+          }, function (err) {
+            if (token() !== session || GF.store.pendingDeletes().includes(id)) return;
+            // 409: outra pessoa salvou antes. O servidor devolve a versão atual; ela substitui a deste aparelho.
+            if (err.status === 409 && err.data && err.data.script) {
+              GF.store.putScript(Object.assign(err.data.script, { syncedAt: err.data.script.updatedAt }));
+              try { root.dispatchEvent(new CustomEvent('gf:synced')); } catch (e) { /* noop */ }
+              notify(err.message, 'crit');
+              return;
+            }
+            if (err.status === 403 && err.code === 'live-edit') return liveEditDenied(script.id, err.message, quiet);
+            if (err.status === 403 && !quiet) notify(err.message + ' A alteração ficou só neste aparelho.', 'crit');
+            // sem conexão: fica salvo aqui e sobe na próxima sincronização
+          });
+        }).finally(function () { if (saving[id] === request) delete saving[id]; });
+        saving[id] = request;
       }, 400);
     },
     removeScript: function (id) {
-      call('DELETE', '/api/scripts/' + encodeURIComponent(id)).catch(function () { /* removido localmente */ });
+      clearTimeout(pending[id]);
+      delete pending[id];
+      activePulls.forEach(function (deleted) { deleted.add(id); });
+      return sendDelete(id);
     },
     pushSession: function (s) {
       // keepalive: a gravação termina mesmo que a página mude para o histórico
@@ -195,14 +237,22 @@
     /* Junta o que está no servidor com o que está no aparelho. */
     pull: function () {
       if (!sync.enabled() || !isOnline()) return Promise.resolve(false);
-      return Promise.all([call('GET', '/api/scripts'), call('GET', '/api/sessions')]).then(function (r) {
-        var server = r[0].scripts || [], S = GF.store;
-        var local = S.getScripts(), byId = {}, out = [], uploads = [];
+      var S = GF.store, session = token(), deleted = new Set(S.pendingDeletes());
+      activePulls.add(deleted);
+      return Promise.all(Array.from(deleted, sendDelete)).then(function () {
+        if (token() !== session || !isOnline()) return null;
+        return Promise.all([call('GET', '/api/scripts'), call('GET', '/api/sessions')]);
+      }).then(function (r) {
+        if (!r || token() !== session) return false;
+        S.pendingDeletes().forEach(function (id) { deleted.add(id); });
+        var server = (r[0].scripts || []).filter(function (s) { return !deleted.has(s.id); });
+        var local = S.getScripts(), byId = Object.create(null), out = [], uploads = [];
         server.forEach(function (s) { byId[s.id] = s; });
         local.forEach(function (l) {
+          if (deleted.has(l.id)) return;
           var s = byId[l.id];
           if (!s) { if (!l.syncedAt) { out.push(l); uploads.push(l); } return; } // apagado no servidor ou ainda não enviado
-          if ((l.updatedAt || 0) > (s.updatedAt || 0) && l.syncedAt !== l.updatedAt) { out.push(l); uploads.push(l); }
+          if (l.syncedAt !== l.updatedAt && (l.syncedAt === s.updatedAt || (l.updatedAt || 0) > (s.updatedAt || 0))) { out.push(l); uploads.push(l); }
           else out.push(Object.assign(s, { syncedAt: s.updatedAt }));
           delete byId[l.id];
         });
@@ -217,7 +267,7 @@
         S.putSessions(sessions.concat(mine));
         try { root.dispatchEvent(new CustomEvent('gf:synced')); } catch (e) { /* noop */ }
         return true;
-      }).catch(function () { return false; });
+      }).catch(function () { return false; }).finally(function () { activePulls.delete(deleted); });
     }
   };
 

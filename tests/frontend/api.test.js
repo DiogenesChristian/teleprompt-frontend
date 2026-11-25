@@ -107,3 +107,106 @@ test('resposta do backend passa pela trava editorial', async () => {
   assert.equal(protegido.guard.blocked, false);
   assert.equal(protegido.guard.needsConfirm, true, 'alteração de âncora exige confirmação');
 });
+
+function syncBrowser(storage, online, fetchImpl) {
+  const api = loadApi({ online, fetchImpl });
+  window.localStorage = storage;
+  const storePath = path.resolve(__dirname, '../../frontend/js/store.js');
+  delete require.cache[storePath];
+  require(storePath);
+  window.GF.store.setUser({ id: 'u1', token: 'token' });
+  return { api, store: window.GF.store };
+}
+
+function localStorage() {
+  const data = new Map();
+  return {
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => data.set(key, value),
+    removeItem: (key) => data.delete(key)
+  };
+}
+
+function syncResponse(status, body) {
+  return Promise.resolve({ status, ok: status >= 200 && status < 300, text: async () => JSON.stringify(body) });
+}
+
+test('exclusão offline sobrevive à reabertura e impede que a cópia remota reapareça', async () => {
+  const storage = localStorage();
+  const remote = script();
+  const offline = syncBrowser(storage, false, () => assert.fail('fetch offline'));
+  offline.store.putScript(remote);
+  offline.store.deleteScript(remote.id);
+  assert.equal(offline.store.getScript(remote.id), null);
+  assert.equal(await offline.api.sync.pull(), false);
+
+  let status = 403;
+  let deleted = false;
+  const calls = [];
+  const { api, store } = syncBrowser(storage, true, (url, options) => {
+    calls.push(options.method);
+    if (options.method === 'DELETE') {
+      deleted = status === 204;
+      return syncResponse(status);
+    }
+    return syncResponse(200, url.endsWith('/sessions') ? { sessions: [] } : { scripts: deleted ? [] : [remote] });
+  });
+
+  assert.deepEqual(store.pendingDeletes(), [remote.id]);
+  assert.equal(await api.sync.pull(), true);
+  assert.equal(store.getScript(remote.id), null);
+  assert.deepEqual(store.pendingDeletes(), [remote.id]);
+
+  status = 204;
+  assert.equal(await api.sync.pull(), true);
+  assert.deepEqual(store.pendingDeletes(), []);
+  assert.equal(await api.sync.pull(), true);
+  assert.equal(store.getScript(remote.id), null);
+  assert.deepEqual(calls, ['DELETE', 'GET', 'GET', 'DELETE', 'GET', 'GET', 'GET', 'GET']);
+});
+
+test('exclusão aguarda o PUT em andamento e cancela outro salvamento agendado', async () => {
+  let completePut, startedPut;
+  const started = new Promise((resolve) => { startedPut = resolve; });
+  const calls = [];
+  const { api, store } = syncBrowser(localStorage(), true, (_url, options) => {
+    calls.push(options.method);
+    if (options.method === 'PUT') {
+      startedPut();
+      return new Promise((resolve) => { completePut = resolve; });
+    }
+    return syncResponse(204);
+  });
+  const local = store.saveScript(script());
+  await started;
+  store.saveScript({ ...local, title: 'Última alteração' });
+  store.deleteScript(local.id);
+  const deletion = api.sync.removeScript(local.id);
+  assert.deepEqual(calls, ['PUT']);
+  completePut(await syncResponse(200, { script: local }));
+  await deletion;
+  assert.deepEqual(calls, ['PUT', 'DELETE']);
+  assert.equal(store.getScript(local.id), null);
+});
+
+test('sincronização preserva uma edição offline baseada na versão do servidor', async () => {
+  const storage = localStorage();
+  const remote = { ...script(), title: 'Versão anterior', updatedAt: Date.now() + 60_000 };
+  const offline = syncBrowser(storage, false);
+  offline.store.putScript({ ...remote, syncedAt: remote.updatedAt });
+  offline.store.saveScript({ ...offline.store.getScript(remote.id), title: 'Edição offline' });
+
+  let sent;
+  const uploaded = new Promise((resolve) => { sent = resolve; });
+  const { api, store } = syncBrowser(storage, true, (url, options) => {
+    if (options.method === 'PUT') {
+      const saved = JSON.parse(options.body);
+      sent(saved);
+      return syncResponse(200, { script: saved });
+    }
+    return syncResponse(200, url.endsWith('/sessions') ? { sessions: [] } : { scripts: [remote] });
+  });
+  assert.equal(await api.sync.pull(), true);
+  assert.equal(store.getScript(remote.id).title, 'Edição offline');
+  assert.equal((await uploaded).title, 'Edição offline');
+});
