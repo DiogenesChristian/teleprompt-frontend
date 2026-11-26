@@ -87,7 +87,13 @@
     }).then(function (res) {
       if (res.status === 503) throw ApiError('unavailable');
       if (res.status === 401) { expired(); throw ApiError('auth'); }
-      if (!res.ok) throw ApiError('http', 'HTTP ' + res.status);
+      if (!res.ok) {
+        if (res.status === 400 || res.status === 422) return res.json().catch(function () { return {}; }).then(function (data) {
+          var err = new Error(typeof data.error === 'string' ? data.error : 'Dados inválidos. Verifique os blocos do roteiro.');
+          err.code = 'validation'; throw err;
+        });
+        throw ApiError('http', 'HTTP ' + res.status);
+      }
       return res.json();
     }, function (err) {
       if (err && err.name === 'AbortError') throw err;
@@ -116,6 +122,14 @@
   function review(script, opts) {
     opts = opts || {};
     if (!isOnline()) return Promise.reject(ApiError('offline'));
+    var invalid = !script || !Array.isArray(script.blocks) || !script.blocks.length;
+    var ids = new Set();
+    if (!invalid) invalid = script.blocks.some(function (b) {
+      if (!b || typeof b.id !== 'string' || !b.id.trim() || ids.has(b.id) || typeof b.text !== 'string' || !b.text.trim()) return true;
+      ids.add(b.id); return false;
+    });
+    if (invalid) { var err = new Error('Preencha todos os blocos com texto válido antes de revisar.'); err.code = 'validation'; return Promise.reject(err); }
+    if (!Array.isArray(script.anchors)) { var err = new Error('Lista de âncoras inválida.'); err.code = 'validation'; return Promise.reject(err); }
     var useRemote = !!base();
     if (!useRemote && !cfg.LOCAL_REVIEW_FALLBACK) return Promise.reject(ApiError('unavailable'));
     return withTimeout(function (s) { return useRemote ? remoteReview(script, s) : localReview(script, s); }, opts.signal)
@@ -199,7 +213,7 @@
   /* O servidor recusou a edição porque o roteiro está no ar e esta função não pode
    * alterar o texto agora. Avisa uma vez (não a cada tecla), traz de volta a versão
    * do servidor e avisa as telas para travar a edição. */
-  var deniedAt = {};
+  var deniedAt = {}, validationNotices = {};
   function liveEditDenied(id, message, quiet) {
     var now = Date.now();
     if (GF.store.pendingDeletes().includes(id)) return;
@@ -240,6 +254,14 @@
               return;
             }
             if (err.status === 403 && err.code === 'live-edit') return liveEditDenied(script.id, err.message, quiet);
+            if (err.status === 400 || err.status === 422 || err.status === 413) {
+              var previous = validationNotices[id];
+              if (!previous || previous.message !== err.message || Date.now() - previous.at > 30000) {
+                notify(err.message + ' A alteração ficou só neste aparelho.', 'warn');
+                validationNotices[id] = {message: err.message, at: Date.now()};
+              }
+              return;
+            }
             if (err.status === 403 && !quiet) notify(err.message + ' A alteração ficou só neste aparelho.', 'crit');
             // sem conexão: fica salvo aqui e sobe na próxima sincronização
           }).finally(function () { delete sending[id]; });
