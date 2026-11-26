@@ -2,7 +2,7 @@
   "name": "teleprompt-frontend",
   "version": "0.1.0",
   "private": true,
-  "description": "Globo Flow — teleprompter aumentado por IA (frontend em HTML, CSS e JavaScript).",
+  "description": "Globo Flow — teleprompter com revisão textual por regras (frontend em HTML, CSS e JavaScript).",
   "scripts": {
     "start": "npx serve frontend",
     "test": "node --test"

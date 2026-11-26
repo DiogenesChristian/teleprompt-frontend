@@ -54,7 +54,7 @@
       '</div>' +
       '<aside class="ed-side">' +
         '<section class="card" aria-labelledby="h-appr"><div class="card-head"><h2 id="h-appr">Aprovação</h2><span id="appr-pill"></span></div><div id="approval" style="display:grid;gap:12px"></div></section>' +
-        '<section class="card" aria-labelledby="h-ai"><div class="card-head"><h2 id="h-ai">Revisão com IA</h2><span id="ai-count" class="muted" style="font-size:13px"></span></div><div id="ai" style="display:grid;gap:12px"></div></section>' +
+        '<section class="card" aria-labelledby="h-ai"><div class="card-head"><h2 id="h-ai">Revisão textual por regras</h2><span id="ai-count" class="muted" style="font-size:13px"></span></div><div id="ai" style="display:grid;gap:12px"></div></section>' +
       '</aside>' +
     '</div>';
 
@@ -382,7 +382,7 @@
     if (un) un.addEventListener('click', function () { script.status = 'em-revisao'; script.approvedBy = null; script.approvedAt = null; save(true); });
   }
 
-  /* ---------------- revisão com IA (US03/US04) ---------------- */
+  /* ---------------- revisão textual por regras (US03/US04) ---------------- */
   var timer = null;
   function startReview() {
     var ctrl = new AbortController();
@@ -431,8 +431,8 @@
       h = '<div class="ai-progress" role="status">' + icon('loader-circle', { size: 18, cls: 'spin' }) + '<span>Analisando… <span class="tc" id="ai-elapsed">0 s</span></span>' +
         '<button type="button" class="btn btn-sm" id="btn-cancel">Cancelar</button></div>';
     } else {
-      h = '<button type="button" class="btn btn-primary btn-block" id="btn-review">' + icon('sparkles', { size: 16 }) + (r.status === 'done' ? 'Revisar novamente' : 'Revisar com IA') + '</button>';
-      if (r.status === 'idle') h += '<p class="field-hint">Aponta erros, repetições e trechos difíceis de ler em voz alta. Nada muda sem o seu aceite.</p>';
+      h = '<button type="button" class="btn btn-primary btn-block" id="btn-review">' + icon('sparkles', { size: 16 }) + (r.status === 'done' ? 'Revisar novamente' : 'Revisar texto') + '</button>';
+      if (r.status === 'idle') h += '<p class="field-hint">Aplica regras locais de gramática, repetição e leitura oral. Não usa IA generativa; nada muda sem o seu aceite.</p>';
       if (r.status === 'error') h += '<div class="notice' + (r.error.code === 'cancelled' ? '' : ' notice-warn') + '">' + icon(r.error.code === 'offline' ? 'wifi-off' : 'info', { size: 16 }) + '<span>' + ui.esc(r.error.message) + '</span></div>';
       if (r.status === 'done') h += r.result.length ? '<div class="sugs">' + r.result.map(sugHTML).join('') + '</div>'
         : '<div class="notice">' + icon('circle-check', { size: 16 }) + '<span>Nenhum problema encontrado.</span></div>';

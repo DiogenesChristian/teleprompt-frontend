@@ -13,8 +13,8 @@ window.GF.config = {
   AI_TIMEOUT_MS: 10000,
 
   // Sem backend, usa o revisor local por regras (gramática, repetição,
-  // leitura oral) para o botão "Revisar com IA". Em produção com backend,
-  // as sugestões vêm de POST {API_BASE}/api/ai/review.
+  // leitura oral) para o botão "Revisar texto". Em produção com backend,
+  // as sugestões vêm de POST {API_BASE}/api/ai/review por regras textuais.
   LOCAL_REVIEW_FALLBACK: true,
 
   // Cria roteiros de exemplo na primeira abertura (útil em homologação).

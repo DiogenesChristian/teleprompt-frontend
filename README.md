@@ -1,9 +1,8 @@
 # Globo Flow — Teleprompter Inteligente
 
-Frontend do teleprompter aumentado por IA para jornalistas, apresentadores e operadores.
-HTML, CSS e JavaScript puros, sem build, seguindo a stack e a estrutura de pastas do documento de projeto.
+Frontend do teleprompter com revisão textual por regras para jornalistas, apresentadores e operadores.
 
-> A IA auxilia na preparação e revisão do roteiro. O profissional mantém o controle editorial e a aprovação final.
+> A revisão aplica regras determinísticas de texto. Não usa IA generativa. O profissional mantém o controle editorial e a aprovação final.
 
 ## Como rodar
 

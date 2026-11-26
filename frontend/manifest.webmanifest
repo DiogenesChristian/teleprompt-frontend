@@ -1,7 +1,7 @@
 {
   "name": "Globo Flow",
   "short_name": "Globo Flow",
-  "description": "Teleprompter aumentado por IA: roteiro, âncoras e timing.",
+  "description": "Teleprompter com revisão textual por regras: roteiro, âncoras e timing.",
   "lang": "pt-BR",
   "id": "./",
   "start_url": "./index.html",

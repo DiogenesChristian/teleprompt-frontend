@@ -1,19 +1,10 @@
 /* Globo Flow — revisão de roteiro (US03, US04, US05).
  *
- * Este arquivo NÃO usa IA. Ele contém:
- *  1. analyze(): um verificador local por regras (gramática comum, repetição,
- *     espaçamento, frases longas, siglas). É o que roda enquanto o serviço de
- *     IA em Python não existe, e também serve de contingência se a IA cair.
- *  2. guard(): a trava editorial. Toda sugestão — do verificador local ou do
- *     futuro serviço de IA — passa por ela antes de chegar à tela:
- *       • se a sugestão traz número, data ou nome que não estava no roteiro,
- *         ela é BLOQUEADA ("a IA não deve criar fatos novos");
- *       • se altera número, data, nome ou âncora já existente, ela só pode
- *         ser aceita com confirmação explícita.
- *  3. diff(): comparação palavra a palavra entre original e sugestão.
+ * Este arquivo NÃO usa IA generativa. Ele contém:
+ *   - regras locais de gramática, repetição e leitura oral;
+ *   - uma trava editorial que impede sugestões que criam fatos novos.
  *
- * Nada é aplicado ao roteiro sem aceite humano (ver js/editor.js).
- * Funciona no navegador (window.GF.suggestions) e no Node (testes).
+ * Ele serve como fallback sem backend e valida sugestões vindas do serviço Python.
  */
 (function (root, factory) {
   var api = factory();

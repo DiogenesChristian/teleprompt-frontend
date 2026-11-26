@@ -63,7 +63,7 @@
       });
   }
 
-  /* ======================= revisão com IA ======================= */
+  /* ======================= revisão textual por regras ======================= */
 
   /* Executa com limite de tempo e permite cancelar pelo signal externo. */
   function withTimeout(factory, signal) {
