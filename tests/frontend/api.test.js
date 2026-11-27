@@ -265,3 +265,14 @@ function loadStore() {
   window.GF.store.setUser({ id: 'editor-local', token: 'teste' });
   return window.GF.store;
 }
+
+test('bloco vazio ou inválido não é enviado para revisão', async () => {
+  const api = loadApi({fetchImpl: () => assert.fail('não deve enviar dados inválidos')});
+  for (const blocks of [[], [null], [{id:'b1',text:'  '}], [{id:'b1',text:42}], [script().blocks[0],script().blocks[0]]]) {
+    await expectCode(api.review({...script(),blocks}), 'validation');
+  }
+});
+test('exibe mensagem de validação enviada pelo backend', async () => {
+  const api = loadApi({fetchImpl: () => jsonResponse(400,{error:'Bloco 1: texto inválido.'})});
+  await assert.rejects(api.review(script()), e => e.code === 'validation' && e.message === 'Bloco 1: texto inválido.');
+});
